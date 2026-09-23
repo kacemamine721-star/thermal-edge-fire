@@ -42,6 +42,7 @@ ENV/
 # ── Jupyter ───────────────────────────────────────────────────
 .ipynb_checkpoints/
 *.ipynb
+!notebooks/*.ipynb
 
 # ── Testing & coverage ───────────────────────────────────────
 .pytest_cache/
