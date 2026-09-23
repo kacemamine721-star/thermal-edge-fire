@@ -49,10 +49,29 @@ def parse_scene(stem: str) -> Dict[str, Optional[str]]:
     return {"scene_id": None, "path": None, "row": None, "date": None}
 
 
+def classify_region(lat: Optional[float], lon: Optional[float]) -> str:
+    """Categorize geographic coordinate into targeted operational regions.
+    
+    Regions:
+      - NORTH_AFRICA_MED: Tunisia, Maghreb, and Mediterranean Basin (high summer LST, dry maquis/pine)
+      - SUB_SAHARAN_AFRICA: Tropical savannas and seasonal agricultural burns
+      - GLOBAL_REFERENCE: Other worldwide benchmark scenes
+    """
+    if lat is None or lon is None:
+        return "GLOBAL_REFERENCE"
+    # North Africa & Mediterranean: 27°N to 46°N, 18°W to 36°E
+    if 27.0 <= lat <= 46.0 and -18.0 <= lon <= 36.0:
+        return "NORTH_AFRICA_MED"
+    # Sub-Saharan Africa: 35°S to 27°N, 18°W to 52°E
+    if -35.0 <= lat < 27.0 and -18.0 <= lon <= 52.0:
+        return "SUB_SAHARAN_AFRICA"
+    return "GLOBAL_REFERENCE"
+
+
 def index_patches(
-    root: Union[str, Path], algorithm: str = "voting"
+    root: Union[str, Path], algorithm: str = "voting", extract_geo: bool = True
 ) -> pd.DataFrame:
-    """Index all image patches and pair them with their corresponding masks."""
+    """Index all image patches and pair them with their corresponding masks and regions."""
     root_path = Path(root)
     if not root_path.exists():
         raise FileNotFoundError(f"ActiveFire root directory not found: {root_path}")
@@ -77,6 +96,9 @@ def index_patches(
                 "path",
                 "row",
                 "date",
+                "center_lat",
+                "center_lon",
+                "region",
             ]
         )
 
@@ -100,6 +122,30 @@ def index_patches(
         matched_mask = mask_lookup.get(norm_key)
 
         scene_meta = parse_scene(stem)
+
+        center_lat, center_lon = None, None
+        if extract_geo:
+            try:
+                with rasterio.open(str(img_path)) as src:
+                    if src.crs:
+                        bounds = src.bounds
+                        cx = (bounds.left + bounds.right) / 2.0
+                        cy = (bounds.bottom + bounds.top) / 2.0
+                        crs_str = str(src.crs)
+                        match = re.search(r"zone\s*(\d+)\s*([NS])?", crs_str, re.IGNORECASE)
+                        if match:
+                            import pyproj
+                            zone = int(match.group(1))
+                            is_south = bool(match.group(2) and match.group(2).upper() == "S")
+                            proj = pyproj.Proj(proj="utm", zone=zone, south=is_south, ellps="WGS84")
+                            lon, lat = proj(cx, cy, inverse=True)
+                            center_lat = round(float(lat), 4)
+                            center_lon = round(float(lon), 4)
+            except Exception:
+                pass
+
+        region = classify_region(center_lat, center_lon)
+
         records.append(
             {
                 "stem": stem,
@@ -110,6 +156,9 @@ def index_patches(
                 "path": scene_meta["path"],
                 "row": scene_meta["row"],
                 "date": scene_meta["date"],
+                "center_lat": center_lat,
+                "center_lon": center_lon,
+                "region": region,
             }
         )
 

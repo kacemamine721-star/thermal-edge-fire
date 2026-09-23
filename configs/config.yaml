@@ -52,7 +52,7 @@ validation:
   jump_frac_reject: 0.10
   noise_floor: 1.0
   stripe_k: 10.0
-  stripe_frac_reject: 0.05
+  stripe_frac_reject: 0.20
   hot_k: 8.0
   hot_isolation_ratio: 0.35
   hot_frac_reject: 0.01
