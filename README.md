@@ -4,6 +4,8 @@ Autonomous edge-computing pipeline for real-time wildfire detection and data pri
 
 Anchored to documented flight precedent (**KITSUNE** CM3+ payload & **Chatar et al.** downlink-prioritization pipeline), enhanced with a **Dual-Gate Validation Architecture** (validation before and after treatment) to guarantee input data validity and protect detection recall (§6.3, in response to industry feedback from John McDonald, IEEE Life Fellow).
 
+> 👥 **Team Work Division & Architecture Blueprint:** See [`docs/TEAM_ROLES_AND_TASKS.md`](docs/TEAM_ROLES_AND_TASKS.md) for the complete 3-person task breakdown across Stages 1 to 4 with strict interface contracts.
+
 ---
 
 ## 🏛️ Pipeline & Dual-Gate Validation Architecture
