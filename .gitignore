@@ -6,6 +6,7 @@
 # ── Data (large satellite imagery — NEVER commit) ─────────────
 data/raw/
 data/external/
+samples/
 data/interim/
 data/processed/
 *.tif

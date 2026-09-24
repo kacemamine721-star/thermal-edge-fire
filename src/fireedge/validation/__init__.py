@@ -9,9 +9,17 @@ from .ground_gate_validator import GroundGateValidator
 from .flight_gate_validator import FlightGateValidator
 from .frame_validator import FrameValidator, batch_validate, frame_metrics
 from .output_validator import (
-    OutputValidationReport,
-    OutputValidator,
-    OutputValidatorConfig,
+    AlertPacket,
+    RejectReason,
+    ValidationResult as OutputValidationReport,
+    ValidatorConfig as OutputValidatorConfig,
+    check_preprocessing_sanity,
+    check_spatial_plausibility,
+    check_thermal_consistency,
+    crc16_ccitt,
+    pack_alert_packet,
+    validate_alert_packet,
+    validate_output,
 )
 
 __all__ = [
@@ -30,5 +38,13 @@ __all__ = [
     # Gate 2: Post-treatment Output & Physical Sanity Gate
     "OutputValidatorConfig",
     "OutputValidationReport",
-    "OutputValidator",
+    "RejectReason",
+    "AlertPacket",
+    "check_preprocessing_sanity",
+    "check_spatial_plausibility",
+    "check_thermal_consistency",
+    "validate_output",
+    "pack_alert_packet",
+    "validate_alert_packet",
+    "crc16_ccitt",
 ]

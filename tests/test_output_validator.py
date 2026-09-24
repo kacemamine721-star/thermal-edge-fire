@@ -1,89 +1,160 @@
-"""Unit tests for Gate 2: Post-Treatment Output & Physical Sanity Gate."""
+"""Tests for Gate 2 post-treatment and physical sanity validation."""
+
 import numpy as np
-import pytest
 
 from fireedge.validation import (
-    OutputValidator,
+    AlertPacket,
     OutputValidatorConfig,
-    Status,
+    RejectReason,
+    check_preprocessing_sanity,
+    pack_alert_packet,
+    validate_alert_packet,
+    validate_output,
 )
 
 
-def test_preprocessing_validation_passes_clean():
-    clean_tensor = np.random.uniform(0.1, 0.9, size=(2, 256, 256)).astype(np.float32)
-    val = OutputValidator()
-    rep = val.validate_preprocessing(clean_tensor)
-    assert rep.status == Status.PASS
-    assert rep.ok is True
+def _clean_tensor() -> np.ndarray:
+    return np.full((1, 64, 64), 290.0, dtype=np.float32)
 
 
-def test_preprocessing_validation_rejects_nans():
-    corrupt_tensor = np.random.uniform(0.1, 0.9, size=(2, 256, 256)).astype(np.float32)
-    corrupt_tensor[0, 10, 10] = np.nan
-    val = OutputValidator()
-    rep = val.validate_preprocessing(corrupt_tensor)
-    assert rep.status == Status.REJECT
-    assert any("PREPROCESSING_NONFINITE" in r for r in rep.reasons)
+def _fire_case() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    frame = np.full((64, 64), 290.0, dtype=np.float32)
+    frame[30:34, 30:34] = 330.0
+    mask = np.zeros((64, 64), dtype=bool)
+    mask[30:34, 30:34] = True
+    return _clean_tensor(), frame, mask
 
 
-def test_no_fire_prediction_passes():
-    raw_thermal = np.full((256, 256), 28000, dtype=np.uint16)
-    pred_mask = np.zeros((256, 256), dtype=np.uint8)
-    val = OutputValidator()
-    rep = val.validate_prediction(pred_mask, raw_thermal)
-    assert rep.status == Status.PASS
-    assert rep.metrics["fire_pixels"] == 0
+def test_preprocessing_sanity_passes_clean_tensor():
+    result = check_preprocessing_sanity(_clean_tensor(), OutputValidatorConfig())
+
+    assert result.passed is True
 
 
-def test_physically_consistent_fire_passes():
-    # Background thermal at 28000 DN, Fire cluster at 45000 DN (strong thermal anomaly)
-    raw_thermal = np.full((256, 256), 28000, dtype=np.float32)
-    raw_thermal[100:105, 100:105] = 45000.0  # +60% thermal contrast
+def test_preprocessing_sanity_rejects_nonfinite_values():
+    tensor = _clean_tensor()
+    tensor[:, :8, :] = np.nan
 
-    pred_mask = np.zeros((256, 256), dtype=np.uint8)
-    pred_mask[100:105, 100:105] = 1
+    result = check_preprocessing_sanity(tensor, OutputValidatorConfig())
 
-    val = OutputValidator()
-    rep = val.validate_prediction(pred_mask, raw_thermal)
-    assert rep.status == Status.PASS
-    assert rep.ok is True
-    assert rep.metrics["thermal_contrast_ratio"] > 1.15
+    assert result.passed is False
+    assert result.reason is RejectReason.NONFINITE_TENSOR
 
 
-def test_cold_fire_inconsistency_rejects():
-    # CNN false-alarm hallucinated fire on a cold cloud edge (thermal = 18000 vs bg 28000)
-    raw_thermal = np.full((256, 256), 28000, dtype=np.float32)
-    raw_thermal[100:105, 100:105] = 18000.0  # Cold cloud edge!
+def test_preprocessing_sanity_rejects_out_of_physical_range():
+    tensor = _clean_tensor()
+    tensor[:, :8, :] = 450.0
 
-    pred_mask = np.zeros((256, 256), dtype=np.uint8)
-    pred_mask[100:105, 100:105] = 1
+    result = check_preprocessing_sanity(tensor, OutputValidatorConfig())
 
-    val = OutputValidator()
-    rep = val.validate_prediction(pred_mask, raw_thermal)
-    assert rep.status == Status.REJECT
-    assert any("PHYSICAL_THERMAL_INCONSISTENCY" in r for r in rep.reasons)
+    assert result.passed is False
+    assert result.reason is RejectReason.OUT_OF_PHYSICAL_RANGE
 
 
-def test_hallucinated_massive_area_rejects():
-    # Model collapse predicting >50% of the entire scene is on fire
-    raw_thermal = np.full((256, 256), 35000, dtype=np.float32)
-    pred_mask = np.ones((256, 256), dtype=np.uint8)  # 100% fire
+def test_spatial_filter_rejects_single_pixel_blip():
+    _, frame, mask = _fire_case()
+    mask[:, :] = False
+    mask[10, 10] = True
 
-    val = OutputValidator(OutputValidatorConfig(max_fire_fraction=0.50))
-    rep = val.validate_prediction(pred_mask, raw_thermal)
-    assert rep.status == Status.REJECT
-    assert any("HALLUCINATED_AREA_EXCESS" in r for r in rep.reasons)
+    result = validate_output(_clean_tensor(), frame, mask, OutputValidatorConfig())
+
+    assert result.passed is False
+    assert result.reason is RejectReason.ALL_COMPONENTS_SUBPIXEL
 
 
-def test_isolated_speckle_flagged():
-    # Single 1-pixel hot detection without cluster confirmation
-    raw_thermal = np.full((256, 256), 28000, dtype=np.float32)
-    raw_thermal[50, 50] = 40000.0
+def test_spatial_filter_rejects_catastrophic_collapse():
+    _, frame, _ = _fire_case()
+    mask = np.ones((64, 64), dtype=bool)
 
-    pred_mask = np.zeros((256, 256), dtype=np.uint8)
-    pred_mask[50, 50] = 1  # 1 pixel only
+    result = validate_output(_clean_tensor(), frame, mask, OutputValidatorConfig())
 
-    val = OutputValidator(OutputValidatorConfig(min_fire_pixels=2))
-    rep = val.validate_prediction(pred_mask, raw_thermal)
-    assert rep.status == Status.PASS_WITH_FLAGS
-    assert any("ISOLATED_SPECKLE_FLAG" in r for r in rep.reasons)
+    assert result.passed is False
+    assert result.reason is RejectReason.CATASTROPHIC_COLLAPSE
+    assert result.telemetry_flag is True
+
+
+def test_thermal_consistency_accepts_hot_candidate():
+    tensor, frame, mask = _fire_case()
+
+    result = validate_output(tensor, frame, mask, OutputValidatorConfig())
+
+    assert result.passed is True
+    assert result.surviving_mask is not None
+    assert result.surviving_mask.sum() == mask.sum()
+
+
+def test_thermal_consistency_rejects_cold_candidate():
+    tensor, frame, mask = _fire_case()
+    frame[30:34, 30:34] = 270.0
+
+    result = validate_output(tensor, frame, mask, OutputValidatorConfig())
+
+    assert result.passed is False
+    assert result.reason is RejectReason.THERMAL_INCONSISTENT
+
+
+def test_alert_packet_round_trip_validates_crc_and_footprint():
+    cfg = OutputValidatorConfig()
+    packet = pack_alert_packet(
+        AlertPacket(
+            timestamp=1_758_000_000,
+            lat=36.8,
+            lon=10.2,
+            bbox=(30, 30, 4, 4),
+            confidence=0.91,
+            intensity_k=330.0,
+        ),
+        cfg,
+    )
+    footprint = [(30.0, 5.0), (30.0, 15.0), (40.0, 15.0), (40.0, 5.0)]
+
+    result = validate_alert_packet(packet, cfg, footprint)
+
+    assert result.passed is True
+    assert result.packet == packet
+    assert len(packet) <= cfg.max_packet_bytes
+
+
+def test_alert_packet_rejects_checksum_corruption():
+    cfg = OutputValidatorConfig()
+    packet = bytearray(
+        pack_alert_packet(
+            AlertPacket(1_758_000_000, 36.8, 10.2, (0, 0, 4, 4), 0.9, 330.0),
+            cfg,
+        )
+    )
+    packet[0] ^= 0x01
+    footprint = [(30.0, 5.0), (30.0, 15.0), (40.0, 15.0), (40.0, 5.0)]
+
+    result = validate_alert_packet(bytes(packet), cfg, footprint)
+
+    assert result.passed is False
+    assert result.reason is RejectReason.CHECKSUM_MISMATCH
+
+
+def test_alert_packet_rejects_coordinate_outside_footprint():
+    cfg = OutputValidatorConfig()
+    packet = pack_alert_packet(
+        AlertPacket(1_758_000_000, 20.0, 10.2, (0, 0, 4, 4), 0.9, 330.0),
+        cfg,
+    )
+    footprint = [(30.0, 5.0), (30.0, 15.0), (40.0, 15.0), (40.0, 5.0)]
+
+    result = validate_alert_packet(packet, cfg, footprint)
+
+    assert result.passed is False
+    assert result.reason is RejectReason.OUTSIDE_FOOTPRINT
+
+
+def test_alert_packet_rejects_zero_sized_bounding_box():
+    cfg = OutputValidatorConfig()
+    packet = pack_alert_packet(
+        AlertPacket(1_758_000_000, 36.8, 10.2, (0, 0, 0, 4), 0.9, 330.0),
+        cfg,
+    )
+    footprint = [(30.0, 5.0), (30.0, 15.0), (40.0, 15.0), (40.0, 5.0)]
+
+    result = validate_alert_packet(packet, cfg, footprint)
+
+    assert result.passed is False
+    assert result.reason is RejectReason.PACKET_SCHEMA_INVALID
