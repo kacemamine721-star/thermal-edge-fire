@@ -32,8 +32,16 @@ from .base_validator import (
 class FlightGateValidator:
     """In-orbit pre-treatment quality gate for single-channel LWIR microbolometers."""
 
-    def __init__(self, config: Optional[ValidatorConfig] = None):
+    def __init__(
+        self,
+        config: Optional[ValidatorConfig] = None,
+        halo_min_ratio: Optional[float] = None,
+        halo_threshold: Optional[float] = None,
+    ):
         self.config = config if config is not None else ValidatorConfig()
+        threshold = halo_threshold if halo_threshold is not None else halo_min_ratio
+        if threshold is not None:
+            self.config.halo_min_ratio = float(threshold)
 
     def validate(self, frame: np.ndarray) -> ValidationReport:
         arr = np.asarray(frame)
