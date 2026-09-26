@@ -69,6 +69,71 @@ To eliminate merge conflicts, duplicate work, and blocking dependencies, the pro
 └──────────────────────────────────────────────────────────┘
 ```
 
+                  ┌────────────────────────────────────────────────────────┐
+                  │          Raw Detector Frame (Level 0 / Raw DN)         │
+                  └───────────────────────────┬────────────────────────────┘
+                                              │
+                                              ▼
+┌──────────────────────────────────────────────────────────────────────────────────────────┐
+│ GATE 1: PRE-TREATMENT INPUT QUALITY GATE (validation/)                                  │
+│ • Validates raw sensor telemetry before any processing touches it.                       │
+│ • Universal Checks: Non-finite / Nodata excess (< 1% / < 30%)                           │
+│ • Universal Checks: Saturation level, dead/stuck sensor, white noise floor               │
+│ • Universal Checks: Defective row/column striping & non-physical spatial gradients       │
+│                                                                                          │
+│ ├── MODE A: GROUND/CURATION MODE (ground_gate_validator.py)                              │
+│ │   └─ ActiveFire (Landsat-8) Pipeline: Exploits dual thermal bands (B10 & B11)          │
+│ │      for cross-channel confirmation to rigorously sanitize training ground truth.     │
+│ │                                                                                        │
+│ └── MODE B: FLIGHT/ORBITAL INFERENCE MODE (flight_gate_validator.py)                     │
+│     └─ CubeSat Single-Channel LWIR Payload: Operates on a single thermal band.           │
+│        Replaces dual-band check with Point Spread Function (PSF) Spatial Halo analysis. │
+│        Rejects isolated Dirac-delta spikes (radiation SEUs) lacking optical blur.       │
+└─────────────────────────────────────────────┬────────────────────────────────────────────┘
+                                              │
+                             ┌────────────────┴────────────────┐
+                             ▼                                 ▼
+                        [ REJECT ]                    [ PASS / PASS_WITH_FLAGS ]
+                   Discard corrupt frame                       │
+                                                               ▼
+                                                  ┌─────────────────────────┐
+                                                  │ STAGE 2: PRE-PROCESSING │
+                                                  │ • Microbolometer NUC    │
+                                                  │ • Dynamic range norm    │
+                                                  └────────────┬────────────┘
+                                                               ▼
+                                                  ┌─────────────────────────┐
+                                                  │ STAGE 3: EDGE INFERENCE │
+                                                  │ • Lightweight U-Net /   │
+                                                  │   Depthwise Separable   │
+                                                  │ • Thermal LWIR input    │
+                                                  └────────────┬────────────┘
+                                                               ▼
+┌──────────────────────────────────────────────────────────────────────────────────────────┐
+│ GATE 2: POST-TREATMENT OUTPUT & PHYSICAL SANITY GATE (output_validator.py)               │
+│ • Validates model predictions & pre-processing integrity before queuing for downlink.   │
+│ • Preprocessing Sanity: Verifies no NaNs, infs, or inverted dynamic ranges.              │
+│ • Thermal Consistency Check: Fire pixels MUST be hotter than surrounding background.     │
+│   (Prevents CNN false alarms on cold cloud edges or coastal boundaries).                 │
+│ • Spatial Plausibility: Rejects single isolated 1-pixel blips or full-frame (>50%)       │
+│   catastrophic network collapse hallucinations.                                          │
+│ • Downlink Packet Verification: Validates ~200-byte alert packet schema, coordinates,   │
+│   and checksum within satellite footprint.                                               │
+└─────────────────────────────────────────────┬────────────────────────────────────────────┘
+                                              │
+                             ┌────────────────┴────────────────┐
+                             ▼                                 ▼
+                        [ REJECT ]                    [ PASS / CONFIRMED ALERT ]
+                   Suppress false alarm                        │
+                                                               ▼
+                                                  ┌─────────────────────────┐
+                                                  │ STAGE 4: TRANSMISSION   │
+                                                  │ • ~200-byte alert packet│
+                                                  │ • Ranked Priority Queue │
+                                                  │ • Retriable downlink    │
+                                                  └─────────────────────────┘
+
+
 ### 2.1 Strict Interface Contracts (Zero-Wait Protocol)
 
 | Between | Interface Contract | Format / Shape | Purpose |

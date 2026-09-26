@@ -56,6 +56,11 @@ class ActiveFireDataset(Dataset):
         C, H, W = raw_img.shape
 
         # 2. Read corresponding binary mask (voting / consensus fire ground truth)
+        if pd.isna(mask_path) or not Path(mask_path).exists():
+            raise FileNotFoundError(
+                f"Missing fire mask for sample {idx}: {mask_path}"
+            )
+
         mask = read_mask(mask_path, shape=(H, W))  # Shape [H, W], uint8 {0, 1}
         mask_binary = (mask > 0).astype(np.float32)
 
@@ -98,6 +103,23 @@ class ActiveFireDataset(Dataset):
 
         # 8. Convert to PyTorch float32 Tensors
         tensor_img = torch.from_numpy(img_tensor_np).float()
+        if not np.isfinite(img_tensor_np).all():
+            raise ValueError(
+                f"Non-finite input encountered at dataset index {idx}"
+            )
+
+        if img_tensor_np.min() < -1e-6 or img_tensor_np.max() > 1.0 + 1e-6:
+            raise ValueError(
+                f"Normalized input outside [0,1] at dataset index {idx}: "
+                f"min={img_tensor_np.min():.6f}, "
+                f"max={img_tensor_np.max():.6f}"
+            )
+
+        if not np.isfinite(mask_binary).all():
+            raise ValueError(
+                f"Non-finite mask encountered at dataset index {idx}"
+            )
+            
         tensor_mask = torch.from_numpy(mask_binary[None]).float()  # Shape [1, H, W]
 
         return tensor_img, tensor_mask
@@ -130,9 +152,5 @@ class ActiveFireDataset(Dataset):
         if k > 0:
             img = np.rot90(img, k=k, axes=(1, 2)).copy()
             mask = np.rot90(mask, k=k, axes=(0, 1)).copy()
-
-        # Thermal Contrast Jitter (0.95x - 1.05x)
-        jitter = self.rng.uniform(0.95, 1.05)
-        img = np.clip(img * jitter, 0.0, 1.0)
 
         return img, mask
