@@ -1,0 +1,15 @@
+{
+  "filename": "LC08_L1TP_001067_20200812_20200812_01_RT_p00000_clean_forest.tif",
+  "model": "unet_pereira3c_int8.onnx",
+  "threshold": 0.96,
+  "temperature": 2.122759125440246,
+  "status": "NO_FIRE_SILENCE",
+  "n_events_detected": 0,
+  "n_events_transmitted": 0,
+  "packet_bytes": 0,
+  "packet_hex": "",
+  "crc32": "NONE",
+  "raw_bytes": 393216,
+  "zlib_compressed_bytes": 175359,
+  "reduction_ratio": "INFINITY (SILENCE)"
+}

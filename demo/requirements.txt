@@ -1,0 +1,9 @@
+# IASTAM Edge Fire Detection — Web Demo Dependencies
+gradio>=5.0.0
+onnxruntime>=1.16.0
+numpy>=1.24.0
+scipy>=1.10.0
+rasterio>=1.3.0
+pyproj>=3.6.0
+matplotlib>=3.7.0
+pillow>=9.5.0

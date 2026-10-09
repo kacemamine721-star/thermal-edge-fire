@@ -1,0 +1,15 @@
+{
+  "filename": "LC08_L1GT_117060_20200825_20200825_01_RT_p00625.tif",
+  "model": "unet_pereira3c_int8.onnx",
+  "threshold": 0.96,
+  "temperature": 2.122759125440246,
+  "status": "ALERT",
+  "n_events_detected": 1,
+  "n_events_transmitted": 1,
+  "packet_bytes": 48,
+  "packet_hex": "F103010000000000000000000000000140813C6C0051348145B300DF00010001000100D5FF440D1E00FFFF048762FF38",
+  "crc32": "0x38FF6287",
+  "raw_bytes": 393216,
+  "zlib_compressed_bytes": 343015,
+  "reduction_ratio": 8192.0
+}
