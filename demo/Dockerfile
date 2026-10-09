@@ -27,8 +27,8 @@ COPY . /app/
 # Expose web service port
 EXPOSE 7860
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+# Health check (30s start period accommodates cold starts on free-tier 0.1 CPU)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:${PORT:-7860}/ || exit 1
 
 # Start the Gradio edge fire detection web application

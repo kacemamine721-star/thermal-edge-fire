@@ -1,0 +1,30 @@
+# Root .dockerignore for thermal-edge-fire
+.git/
+.gitignore
+.env
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.bak
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python cache & tests
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Raw/interim data not part of demo
+data/
+reports/
+notebooks/
+scratch/
+.system_generated/

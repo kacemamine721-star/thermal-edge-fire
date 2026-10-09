@@ -1524,6 +1524,7 @@ if __name__ == "__main__":
         server_name=host,
         server_port=port,
         favicon_path=str(FAVICON_PATH) if FAVICON_PATH.exists() else None,
+        allowed_paths=[str(DEMO_DIR)],
         head=HEAD_HTML,
         share=False,
         theme=EMERALD_THEME,

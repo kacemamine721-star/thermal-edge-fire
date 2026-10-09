@@ -1,0 +1,5 @@
+# SHA-256 Checksums for IASTAM Thermal-Edge-Fire Models & Manifest
+# Generated according to TRD §2.9 for Model Integrity Verification
+c591bca79c28994fa05ad7284ad45ea7c4198761ac30d2357401d656a931ca8e  manifest_v7.json
+50d0000d529720532db5859909ac9acd4147a6fffe6a107de8cd85cb20ba5efa  unet_pereira3c_fp32.onnx
+5cb53cbfb2ee5f54f5d1f52995412de717a4f4c9ea59f5b8f2e8f4b26d0e8a49  unet_pereira3c_int8.onnx

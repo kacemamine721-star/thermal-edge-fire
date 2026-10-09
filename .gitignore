@@ -86,3 +86,12 @@ checkpoints/
 *.zip
 *.tar.gz
 *.7z
+
+# ── Whitelist Standalone Web Demo Assets for Deployment ────────
+!demo/models/
+!demo/models/*
+!demo/models/**
+!demo/sample_data/
+!demo/sample_data/*
+!demo/sample_data/**
+

@@ -7,4 +7,11 @@ __pycache__/
 .gitignore
 .env
 .DS_Store
+Thumbs.db
 *.log
+scratch/
+.system_generated/
+test_*.py
+generate_golden.py
+render.yaml
+README*.md

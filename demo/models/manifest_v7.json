@@ -1,0 +1,556 @@
+{
+  "version": "V7 (multiband information-product pipeline)",
+  "bands_cached": [
+    "c2",
+    "c6",
+    "c7",
+    "b10"
+  ],
+  "configurations": {
+    "pereira3c": [
+      "c7",
+      "c6",
+      "c2"
+    ],
+    "b10": [
+      "b10"
+    ],
+    "pereira3c_b10": [
+      "c7",
+      "c6",
+      "c2",
+      "b10"
+    ]
+  },
+  "reference_configuration": "pereira3c",
+  "payload_proxy_configuration": "pereira3c",
+  "thermal_control_configuration": "b10",
+  "primary_configuration": "pereira3c",
+  "primary_bands": [
+    "c7",
+    "c6",
+    "c2"
+  ],
+  "primary_role": "payload_proxy_flight_candidate",
+  "model_ids": {
+    "pereira3c": 1,
+    "b10": 2,
+    "pereira3c_b10": 3
+  },
+  "label_source": "Pereira voting mask (>=2 of 3 reflectance-based algorithms; no thermal band involved)",
+  "split": "scene-level 70/15/15, seed 42",
+  "model": {
+    "architecture": "Tiny U-Net, standard 3x3 convs",
+    "base": 16,
+    "params": 482737,
+    "GMACs_per_frame": 2.319450112
+  },
+  "probability_calibration": {
+    "method": "scalar logit temperature scaling on AFRICA validation pixels",
+    "temperature": 2.122759125440246,
+    "calibration_pixels": 2787811
+  },
+  "threshold": {
+    "benchmark_threshold": 0.96,
+    "selection_rule": "constrained_plateau_f1",
+    "constraints_met_on_validation": true,
+    "min_frame_recall_target": 0.95,
+    "max_frame_far_target": 0.1,
+    "frame_recall_gap": 0.0,
+    "far_margin": 0.033628318584070796,
+    "note": "When constraints are infeasible, the threshold is a max-F1 benchmark point, not a demonstrated mission operating point."
+  },
+  "packet": {
+    "version": 3,
+    "header_bytes": 17,
+    "event_bytes": 27,
+    "max_events": 6,
+    "max_alert_packet_bytes": 183,
+    "max_empty_or_heartbeat_bytes": 21,
+    "fields": [
+      "acquisition_timestamp_ms",
+      "model_id",
+      "event latitude/longitude",
+      "pixel bbox",
+      "area_ha_x10 (0.1 ha units)",
+      "mean calibrated confidence",
+      "event contrast metric",
+      "GSD_m",
+      "geolocation uncertainty",
+      "flags",
+      "CRC32"
+    ],
+    "metric_semantics": "B10 = thermal hotspot contrast in K*100; Pereira-3C = SWIR2 local spectral contrast in reflectance*10000."
+  },
+  "heartbeat": {
+    "every_n_frames": 30,
+    "purpose": "distinguish no-fire silence from an offline / failed processor."
+  },
+  "pipeline_model": "int8",
+  "pipeline": {
+    "frames": 1500,
+    "model": "int8",
+    "config": "pereira3c",
+    "bands": [
+      "c7",
+      "c6",
+      "c2"
+    ],
+    "reference_only": false,
+    "temperature": 2.122759125440246,
+    "benchmark_threshold": 0.96,
+    "threshold_constraints_met_on_validation": true,
+    "heartbeat_every_n_frames": 30,
+    "acquisition_timestamp_available": false,
+    "raw_bytes_per_frame_selected_bands": 393216,
+    "max_packet_bytes": 183,
+    "overall_reduction_x_including_heartbeats": 6234.991913233755,
+    "latency_total_p50_ms": 64.37603549784399,
+    "latency_total_p95_ms": 77.68012999667917
+  },
+  "test_results_by_config": [
+    {
+      "config": "pereira3c",
+      "selected_epoch": 11,
+      "bands": "c7+c6+c2",
+      "params": 482737,
+      "MACs_G": 2.319450112,
+      "temperature": 2.1227591254,
+      "threshold": 0.96,
+      "rule": "constrained_plateau_f1",
+      "constraints_met": true,
+      "F1": 0.9492492571,
+      "IoU": 0.903400986,
+      "precision": 0.9495738636,
+      "recall": 0.9489248725,
+      "frame_recall": 0.9647744551,
+      "false_alarm_rate": 0.0634730539,
+      "F1@0.25": 0.9486382513,
+      "event_recall_all": 0.9552531427,
+      "event_precision": 0.9836222355,
+      "false_events_per_patch": 0.0286550931,
+      "false_events_per_fire_free_patch": 0.0670658683,
+      "event_recall 1-5 px": 0.945635421,
+      "event_recall 6-25 px": 1.0,
+      "event_recall 26-100 px": 1.0,
+      "event_recall >100 px": 1.0
+    },
+    {
+      "config": "b10",
+      "selected_epoch": 12,
+      "bands": "b10",
+      "params": 482449,
+      "MACs_G": 2.300575744,
+      "temperature": 1.9692834765,
+      "threshold": 0.29,
+      "rule": "infeasible_fallback_far_limited_plateau_f1",
+      "constraints_met": false,
+      "F1": 0.4118569377,
+      "IoU": 0.2593323911,
+      "precision": 0.5533773895,
+      "recall": 0.3279796015,
+      "frame_recall": 0.1801824633,
+      "false_alarm_rate": 0.0263473054,
+      "F1@0.25": 0.4123242146,
+      "event_recall_all": 0.1326259947,
+      "event_precision": 0.830078125,
+      "false_events_per_patch": 0.0363940598,
+      "false_events_per_fire_free_patch": 0.0299401198,
+      "event_recall 1-5 px": 0.0531035449,
+      "event_recall 6-25 px": 0.4549516009,
+      "event_recall 26-100 px": 0.8228571429,
+      "event_recall >100 px": 1.0
+    },
+    {
+      "config": "pereira3c_b10",
+      "selected_epoch": 16,
+      "bands": "c7+c6+c2+b10",
+      "params": 482881,
+      "MACs_G": 2.328887296,
+      "temperature": 2.1770200236,
+      "threshold": 0.6,
+      "rule": "constrained_plateau_f1",
+      "constraints_met": true,
+      "F1": 0.9458879107,
+      "IoU": 0.8973314321,
+      "precision": 0.9662736496,
+      "recall": 0.9263445665,
+      "frame_recall": 0.9642676128,
+      "false_alarm_rate": 0.0670658683,
+      "F1@0.25": 0.9493075308,
+      "event_recall_all": 0.9454503517,
+      "event_precision": 0.9840221048,
+      "false_events_per_patch": 0.027818448,
+      "false_events_per_fire_free_patch": 0.0682634731,
+      "event_recall 1-5 px": 0.933725655,
+      "event_recall 6-25 px": 1.0,
+      "event_recall 26-100 px": 1.0,
+      "event_recall >100 px": 1.0
+    }
+  ],
+  "robustness": [
+    {
+      "scenario": "clean",
+      "pixel_F1": 0.9517381892,
+      "pixel_recall": 0.9539246969,
+      "frame_recall": 0.9658952497,
+      "frame_FAR": 0.0670391061,
+      "event_recall_all": 0.9579976985,
+      "event_recall_>=26px": 1.0,
+      "false_events_per_patch": 0.025
+    },
+    {
+      "scenario": "noise L1",
+      "pixel_F1": 0.9507194703,
+      "pixel_recall": 0.9529036375,
+      "frame_recall": 0.9671132765,
+      "frame_FAR": 0.061452514,
+      "event_recall_all": 0.9579976985,
+      "event_recall_>=26px": 1.0,
+      "false_events_per_patch": 0.022
+    },
+    {
+      "scenario": "noise L2",
+      "pixel_F1": 0.9447019237,
+      "pixel_recall": 0.9495851946,
+      "frame_recall": 0.9695493301,
+      "frame_FAR": 0.0782122905,
+      "event_recall_all": 0.9562715765,
+      "event_recall_>=26px": 1.0,
+      "false_events_per_patch": 0.04
+    },
+    {
+      "scenario": "noise L3",
+      "pixel_F1": 0.8440966951,
+      "pixel_recall": 0.9225271219,
+      "frame_recall": 0.9695493301,
+      "frame_FAR": 0.312849162,
+      "event_recall_all": 0.9447640967,
+      "event_recall_>=26px": 1.0,
+      "false_events_per_patch": 1.351
+    },
+    {
+      "scenario": "quantization L1",
+      "pixel_F1": 0.9518777849,
+      "pixel_recall": 0.9543075941,
+      "frame_recall": 0.9658952497,
+      "frame_FAR": 0.0670391061,
+      "event_recall_all": 0.9585730725,
+      "event_recall_>=26px": 1.0,
+      "false_events_per_patch": 0.026
+    },
+    {
+      "scenario": "quantization L2",
+      "pixel_F1": 0.9523324636,
+      "pixel_recall": 0.9549457562,
+      "frame_recall": 0.9671132765,
+      "frame_FAR": 0.0670391061,
+      "event_recall_all": 0.9591484465,
+      "event_recall_>=26px": 1.0,
+      "false_events_per_patch": 0.026
+    },
+    {
+      "scenario": "quantization L3",
+      "pixel_F1": 0.952568417,
+      "pixel_recall": 0.9573707722,
+      "frame_recall": 0.9683313033,
+      "frame_FAR": 0.0670391061,
+      "event_recall_all": 0.9620253165,
+      "event_recall_>=26px": 1.0,
+      "false_events_per_patch": 0.024
+    },
+    {
+      "scenario": "transients L1",
+      "pixel_F1": 0.8645990047,
+      "pixel_recall": 0.9535417996,
+      "frame_recall": 0.9963459196,
+      "frame_FAR": 0.8212290503,
+      "event_recall_all": 0.9574223245,
+      "event_recall_>=26px": 1.0,
+      "false_events_per_patch": 1.601
+    },
+    {
+      "scenario": "transients L2",
+      "pixel_F1": 0.6717990276,
+      "pixel_recall": 0.9522654754,
+      "frame_recall": 1.0,
+      "frame_FAR": 1.0,
+      "event_recall_all": 0.9528193326,
+      "event_recall_>=26px": 1.0,
+      "false_events_per_patch": 6.526
+    },
+    {
+      "scenario": "transients L3",
+      "pixel_F1": 0.351210991,
+      "pixel_recall": 0.9494575622,
+      "frame_recall": 1.0,
+      "frame_FAR": 1.0,
+      "event_recall_all": 0.9516685846,
+      "event_recall_>=26px": 1.0,
+      "false_events_per_patch": 26.577
+    },
+    {
+      "scenario": "dead_columns L1",
+      "pixel_F1": 0.3884400896,
+      "pixel_recall": 0.9512444161,
+      "frame_recall": 0.9756394641,
+      "frame_FAR": 0.3631284916,
+      "event_recall_all": 0.9568469505,
+      "event_recall_>=26px": 1.0,
+      "false_events_per_patch": 1.954
+    },
+    {
+      "scenario": "dead_columns L2",
+      "pixel_F1": 0.1799333131,
+      "pixel_recall": 0.9470325463,
+      "frame_recall": 0.9890377588,
+      "frame_FAR": 0.6368715084,
+      "event_recall_all": 0.9562715765,
+      "event_recall_>=26px": 1.0,
+      "false_events_per_patch": 6.263
+    },
+    {
+      "scenario": "dead_columns L3",
+      "pixel_F1": 0.0749290098,
+      "pixel_recall": 0.939629866,
+      "frame_recall": 0.993909866,
+      "frame_FAR": 0.9273743017,
+      "event_recall_all": 0.9470655926,
+      "event_recall_>=26px": 1.0,
+      "false_events_per_patch": 16.863
+    },
+    {
+      "scenario": "transients L2 + Gate1 scrub",
+      "pixel_F1": 0.9431060994,
+      "pixel_recall": 0.9393746011,
+      "frame_recall": 0.9646772229,
+      "frame_FAR": 0.0726256983,
+      "event_recall_all": 0.9568469505,
+      "event_recall_>=26px": 1.0,
+      "false_events_per_patch": 0.051
+    },
+    {
+      "scenario": "transients L3 + Gate1 scrub",
+      "pixel_F1": 0.9397867314,
+      "pixel_recall": 0.9392469687,
+      "frame_recall": 0.9634591961,
+      "frame_FAR": 0.0726256983,
+      "event_recall_all": 0.9562715765,
+      "event_recall_>=26px": 1.0,
+      "false_events_per_patch": 0.103
+    },
+    {
+      "scenario": "clean",
+      "pixel_F1": 0.9446797587,
+      "pixel_recall": 0.9393746011,
+      "frame_recall": 0.9646772229,
+      "frame_FAR": 0.0670391061,
+      "event_recall_all": 0.9568469505,
+      "event_recall_>=26px": 1.0,
+      "false_events_per_patch": 0.025
+    }
+  ],
+  "onnx_verification": [
+    {
+      "model": "PyTorch FP32",
+      "pixel_F1": 0.9488781715,
+      "pixel_recall": 0.9495551452,
+      "pixel_precision": 0.9482021624,
+      "frame_recall": 0.9614754098,
+      "frame_FAR": 0.0785714286,
+      "alert_decision_agreement_vs_torch": 1.0,
+      "calibrated_prob_MAE_vs_torch": 0.0
+    },
+    {
+      "model": "ONNX FP32",
+      "pixel_F1": 0.9488781715,
+      "pixel_recall": 0.9495551452,
+      "pixel_precision": 0.9482021624,
+      "frame_recall": 0.9614754098,
+      "frame_FAR": 0.0785714286,
+      "alert_decision_agreement_vs_torch": 1.0,
+      "calibrated_prob_MAE_vs_torch": 0.0
+    },
+    {
+      "model": "ONNX INT8",
+      "pixel_F1": 0.9482115151,
+      "pixel_recall": 0.9489676011,
+      "pixel_precision": 0.9474566329,
+      "frame_recall": 0.9598360656,
+      "frame_FAR": 0.0821428571,
+      "alert_decision_agreement_vs_torch": 0.99,
+      "calibrated_prob_MAE_vs_torch": 4.9429e-06
+    }
+  ],
+  "int8_within_tolerance": true,
+  "queue_policies": [
+    {
+      "regime": "stressed (50% of needed capacity)",
+      "policy": "A priority + persistent + retry",
+      "delivered_all": 0.234732311,
+      "delivered_top20pct_urgency": 0.8760051881,
+      "mean_delay_h_top20pct": 4.9588205408,
+      "lost_forever": 0.0,
+      "retries": 2.1666666667
+    },
+    {
+      "regime": "stressed (50% of needed capacity)",
+      "policy": "B FIFO + persistent + retry",
+      "delivered_all": 0.3156039817,
+      "delivered_top20pct_urgency": 0.3360570687,
+      "mean_delay_h_top20pct": 17.8691289774,
+      "lost_forever": 0.0,
+      "retries": 2.6333333333
+    },
+    {
+      "regime": "stressed (50% of needed capacity)",
+      "policy": "C priority, no persistence/retry",
+      "delivered_all": 0.2651600753,
+      "delivered_top20pct_urgency": 0.6662775616,
+      "mean_delay_h_top20pct": 1.9303569266,
+      "lost_forever": 910.4666666667,
+      "retries": 0.0
+    },
+    {
+      "regime": "ample (150%)",
+      "policy": "A priority + persistent + retry",
+      "delivered_all": 0.8214420231,
+      "delivered_top20pct_urgency": 0.9935149157,
+      "mean_delay_h_top20pct": 3.2096176901,
+      "lost_forever": 0.0,
+      "retries": 2.2
+    },
+    {
+      "regime": "ample (150%)",
+      "policy": "B FIFO + persistent + retry",
+      "delivered_all": 0.85267689,
+      "delivered_top20pct_urgency": 0.8722438392,
+      "mean_delay_h_top20pct": 6.8734814127,
+      "lost_forever": 0.0,
+      "retries": 2.3
+    },
+    {
+      "regime": "ample (150%)",
+      "policy": "C priority, no persistence/retry",
+      "delivered_all": 0.6897497982,
+      "delivered_top20pct_urgency": 0.7548638132,
+      "mean_delay_h_top20pct": 1.9299123483,
+      "lost_forever": 384.4,
+      "retries": 0.0
+    }
+  ],
+  "host_benchmark": [
+    {
+      "model": "FP32",
+      "threads": 1,
+      "mean_ms": 46.0841045601,
+      "p50_ms": 45.6925760009,
+      "p95_ms": 49.0689435501,
+      "file_MB": 1.8478183746,
+      "params": 482737,
+      "GMACs": 2.319450112,
+      "host_cpu": "Intel(R) Xeon(R) CPU @ 2.00GHz",
+      "is_onboard_measurement": false
+    },
+    {
+      "model": "FP32",
+      "threads": 4,
+      "mean_ms": 24.18744464,
+      "p50_ms": 24.0095854997,
+      "p95_ms": 25.8554899509,
+      "file_MB": 1.8478183746,
+      "params": 482737,
+      "GMACs": 2.319450112,
+      "host_cpu": "Intel(R) Xeon(R) CPU @ 2.00GHz",
+      "is_onboard_measurement": false
+    },
+    {
+      "model": "INT8",
+      "threads": 1,
+      "mean_ms": 55.2141059999,
+      "p50_ms": 54.6531455002,
+      "p95_ms": 58.8025454499,
+      "file_MB": 0.5027770996,
+      "params": 482737,
+      "GMACs": 2.319450112,
+      "host_cpu": "Intel(R) Xeon(R) CPU @ 2.00GHz",
+      "is_onboard_measurement": false
+    },
+    {
+      "model": "INT8",
+      "threads": 4,
+      "mean_ms": 32.1725570798,
+      "p50_ms": 31.6007550009,
+      "p95_ms": 36.1588338997,
+      "file_MB": 0.5027770996,
+      "params": 482737,
+      "GMACs": 2.319450112,
+      "host_cpu": "Intel(R) Xeon(R) CPU @ 2.00GHz",
+      "is_onboard_measurement": false
+    }
+  ],
+  "manual_zero_shot": [
+    {
+      "config": "pereira3c",
+      "bands": "c7+c6+c2",
+      "temperature": 2.1227591254,
+      "benchmark_threshold": 0.96,
+      "precision": 0.7622045676,
+      "recall": 0.9589870669,
+      "IoU": 0.7381432031,
+      "F1": 0.8493468223,
+      "frame_recall": 0.99,
+      "frame_FAR": 0.0,
+      "event_recall": 0.9289655172,
+      "event_precision": 0.8013784461
+    },
+    {
+      "config": "b10",
+      "bands": "b10",
+      "temperature": 1.9692834765,
+      "benchmark_threshold": 0.29,
+      "precision": 0.7153674191,
+      "recall": 0.2762038674,
+      "IoU": 0.2488554406,
+      "F1": 0.3985336213,
+      "frame_recall": 0.43,
+      "frame_FAR": 0.0,
+      "event_recall": 0.3275862069,
+      "event_precision": 0.9201277955
+    },
+    {
+      "config": "pereira3c_b10",
+      "bands": "c7+c6+c2+b10",
+      "temperature": 2.1770200236,
+      "benchmark_threshold": 0.6,
+      "precision": 0.8386274027,
+      "recall": 0.9475435397,
+      "IoU": 0.8014200264,
+      "F1": 0.8897647574,
+      "frame_recall": 0.99,
+      "frame_FAR": 0.0,
+      "event_recall": 0.9110344828,
+      "event_precision": 0.8180088776
+    }
+  ],
+  "artifacts": {
+    "fp32_onnx": "/kaggle/working/v7_outputs/unet_pereira3c_fp32.onnx",
+    "int8_onnx": "/kaggle/working/v7_outputs/unet_pereira3c_int8.onnx",
+    "sample_alert_packet_bin": "/kaggle/working/v7_outputs/sample_alert_packet.bin",
+    "sample_alert_packet_json": "/kaggle/working/v7_outputs/sample_alert_packet.json",
+    "pi_bundle": "/kaggle/working/v7_outputs/pi_bundle"
+  },
+  "limitations": [
+    "Pereira-3C (C7+C6+C2) is the current SWIR3 payload proxy; it is not the final flight sensor calibration.",
+    "B10 is a thermal control experiment only; it is not the current payload choice. Landsat B10 is also only a sensor proxy.",
+    "Landsat is not a microbolometer: no true NUC stage or sensor-specific microbolometer artifact model is implemented.",
+    "Training labels are SWIR-algorithm outputs; SWIR inputs therefore have a built-in advantage on the voting-mask test.",
+    "The dataset is detection-curated and fire-heavy; it is not an orbit-like prevalence test set.",
+    "The validation frame-recall/FAR mission targets may be infeasible; V7 reports that explicitly instead of silently claiming success.",
+    "Gate 1 scrubbing is disabled by default because isolated 1-pixel fire detections can be removed; the robustness cell measures the trade-off.",
+    "Acquisition timestamps and absolute geolocation uncertainty are not available in the current Landsat patch interface; packets flag these as unavailable rather than inventing values.",
+    "The current pipeline GSD is a 30 m Landsat reference value; flight GSD must be supplied by the payload/geometry layer.",
+    "Latency and energy are host/logic outputs until the Raspberry Pi CM4/target board benchmark is physically measured.",
+    "Queue/retry is a logic prototype, not an orbit/link simulator."
+  ]
+}

@@ -6,8 +6,11 @@ services:
     dockerContext: .
     plan: free
     region: frankfurt
+    healthCheckPath: /
     envVars:
       - key: PORT
         value: 7860
       - key: RENDER
         value: "true"
+      - key: PYTHONUNBUFFERED
+        value: "1"
