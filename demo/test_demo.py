@@ -122,8 +122,11 @@ def test_model_checksums():
     for line in lines:
         expected_hash, fname = line.split(maxsplit=1)
         target_path = DEMO_DIR / "models" / fname
-        assert target_path.exists(), f"Model file {fname} not found in models/"
-        computed_hash = hashlib.sha256(target_path.read_bytes()).hexdigest()
+        raw_bytes = target_path.read_bytes()
+        # Normalize CRLF line endings for text/JSON files across OS platforms
+        if fname.endswith(('.json', '.txt')):
+            raw_bytes = raw_bytes.replace(b'\r\n', b'\n')
+        computed_hash = hashlib.sha256(raw_bytes).hexdigest()
         assert computed_hash == expected_hash, f"SHA-256 mismatch for {fname}: {computed_hash} != {expected_hash}"
 
 
