@@ -102,3 +102,5 @@ epoch_checkpoints/
 !demo/sample_data/
 !demo/sample_data/*
 !demo/sample_data/**
+demo/sample_data/custom_tif/*.tif
+demo/full_scene_outputs/
