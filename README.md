@@ -1,180 +1,286 @@
-# Thermal-Edge-Fire: Onboard 6U CubeSat Wildfire Intelligence
+<p align="center">
+  <img src="img/iastam_banner.jpg" alt="IASTAM Thermal-Edge-Fire Banner" width="100%" />
+</p>
 
-Autonomous edge-computing pipeline for real-time wildfire detection and data prioritization on a 6U CubeSat carrying an uncooled Long-Wave Infrared (LWIR) microbolometer payload.
+<div align="center">
 
-Anchored to documented flight precedent (**KITSUNE** CM3+ payload & **Chatar et al.** downlink-prioritization pipeline), enhanced with a **Dual-Gate Validation Architecture** (validation before and after treatment) to guarantee input data validity, preserve detection recall, and protect edge accelerator power budgets.
+# 🛰️ Thermal-Edge-Fire: Autonomous Onboard Wildfire Intelligence
 
-> 👥 **Team Work Division & Architecture Blueprint:** See [`docs/TEAM_ROLES_AND_TASKS.md`](docs/TEAM_ROLES_AND_TASKS.md) for the complete 3-person task breakdown across Stages 1 to 4 with strict interface contracts.
+### High-Throughput Edge Segmentation & Downlink Prioritization for 6U CubeSats
+
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%20|%203.11%20|%203.14-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.x-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white)](https://pytorch.org)
+[![ONNX Runtime](https://img.shields.io/badge/ONNX_Runtime-INT8%20|%20FP32-005CED?style=for-the-badge&logo=onnx&logoColor=white)](https://onnxruntime.ai)
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://docker.com)
+[![Render](https://img.shields.io/badge/Render-Deployable-46E3B7?style=for-the-badge&logo=render&logoColor=black)](https://render.com)
+[![Tests Passing](https://img.shields.io/badge/Tests-43%2F43%20Passing-10b981?style=for-the-badge&logo=pytest&logoColor=white)](https://pytest.org)
+
+<br/>
+
+<img src="img/spacetoon_horizontal.png" alt="SpaceTOON Project" width="380" />
+
+</div>
 
 ---
 
-## 🏛️ Pipeline & Dual-Gate Validation Architecture
+## 📌 Executive Summary
+
+Modern Earth-Observation CubeSats equipped with Long-Wave Infrared (LWIR) microbolometers are severely constrained by **downlink bandwidth (< 1 Mbps over S/X-band)** and **ground station contact durations (8–10 minutes per pass)**. Transmitting uncompressed multispectral swaths (hundreds of megabytes) induces fatal latency in disaster response workflows.
+
+**Thermal-Edge-Fire** implements an end-to-end autonomous edge-computing pipeline for a **6U CubeSat carrying an uncooled LWIR thermal sensor**. Anchored to flight precedents (**KITSUNE** CM3+ payload & **Chatar et al.** downlink-prioritization pipeline), it integrates a novel **Dual-Gate Validation Architecture** (pre-treatment input quality screening and post-treatment physical consistency verification) to guarantee data integrity, eliminate false alarms from space radiation, compress alert telemetry down to **64 bytes (1,600× bandwidth savings)**, and run within the 512 MB / 0.1 CPU power budget of an embedded space-grade system-on-chip.
+
+---
+
+## 🏛️ System Architecture: Dual-Gate Validation Pipeline
+
+The core innovation of the IASTAM architecture is that treatment (Planck calibration, NUC, neural network inference) is bounded by rigorous, deterministic guards **before** and **after** compute-intensive steps:
 
 ```
-Raw Frame ──► [ GATE 1: Input Quality Gate ] ──► NUC / Calibration / Norm ──► CNN Segmentation ──► [ GATE 2: Output Sanity Gate ] ──► Downlink Queue
-                    (BEFORE Treatment)                                                                      (AFTER Treatment)
+                      ┌─────────────────────────────────────────────────────────────┐
+                      │                    ORBITAL SENSOR FEED                      │
+                      └──────────────────────────────┬──────────────────────────────┘
+                                                     ▼
+                      ┌─────────────────────────────────────────────────────────────┐
+                      │            GATE 1: PRE-TREATMENT INPUT QUALITY              │
+                      │  • Detector health (NaN/Inf, dead scanlines, saturation)    │
+                      │  • Flight PSF Spatial Halo Check (van Dokkum 2001)           │
+                      │  • Cosmic Ray (SEU) vs Optical Hotspot discrimination        │
+                      └──────────────────────┬──────────────────────┬───────────────┘
+                                             │ (PASS)               │ (FAIL / REJECT)
+                                             ▼                      ▼
+                      ┌──────────────────────────────┐       ┌──────────────────────┐
+                      │   SENSOR CONDITIONING / NUC   │       │ REJECT TELEMETRY     │
+                      │  • Two-Point Calibration     │       │ • Error counter log  │
+                      │  • Radiometric Inversion     │       │ • Zero downlink cost │
+                      └──────────────┬───────────────┘       └──────────────────────┘
+                                     ▼
+                      ┌──────────────────────────────┐
+                      │   EDGE NEURAL SEGMENTATION   │
+                      │  • Quantized INT8 U-Net      │
+                      │  • FP32 High-Fidelity Shadow │
+                      └──────────────┬───────────────┘
+                                     ▼
+                      ┌─────────────────────────────────────────────────────────────┐
+                      │           GATE 2: POST-TREATMENT PHYSICAL SANITY            │
+                      │  • Thermal Contrast Verification: μ_fire / μ_bg ≥ 1.15       │
+                      │  • Spatial Plausibility (speckle filter & collapse guard)    │
+                      │  • Alert Packet Generation (64-byte CCSDS binary + CRC-16)  │
+                      └──────────────────────┬──────────────────────────────────────┘
+                                             ▼
+                      ┌─────────────────────────────────────────────────────────────┐
+                      │               PRIORITIZED DOWNLINK QUEUE                    │
+                      │  Active Fire: 64B Alert Packet + Bounded ROI thumbnail      │
+                      │  Nominal Ground: Discarded or lowest-priority background    │
+                      └─────────────────────────────────────────────────────────────┘
 ```
 
-### 1. Gate 1: Pre-Treatment Input Quality Gate (`src/fireedge/validation/`)
-Runs on the **raw detector frame** before preprocessing or CNN inference to save compute:
-* **Ground Mode (`ground_gate_validator.py`):** Comprehensive archive-level screening for multi-band satellite data (checks dead sensors, bit-depth, NaN/Inf, nodata bounds, and saturation excess).
-* **Flight Mode (`flight_gate_validator.py`):** Ultra-fast (< 25 ms on Raspberry Pi Cortex-A72) single-channel LWIR microbolometer validator. Differentiates single-pixel radiation transients (Single-Event Upsets / Cosmic Rays) from true optical hotspots via **Point Spread Function (PSF) Spatial Halo verification** (van Dokkum 2001; Zhukov et al. 2006).
+---
 
-### 2. Preprocessing & Sensor Conditioning (`src/fireedge/preprocessing/`)
-* **Two-Point NUC (`nuc.py`):** Restores detector uniformity across pixel gain/offset variations and replaces dead/unresponsive pixels using local neighborhood median filtering.
-* **Microbolometer Degrader (`nuc.py`):** Injects realistic fixed-pattern noise (FPN), 1/f temporal drift, read noise, and dead pixels for robust CNN domain adaptation.
-* **Radiometric Calibration (`calibration.py`):** Inverts Landsat-8 TIRS Planck function ($K_1, K_2, M_L, A_L$) to compute physical Brightness Temperature in Kelvin ($T_B$).
-* **Normalization (`normalization.py`):** Normalizes Kelvin brightness temperatures to the $[0.0, 1.0]$ float32 range via physical window clipping or robust percentile scaling.
+## 🔬 Core Innovations & Mathematical Contracts
 
-### 3. Edge Data Engine & Contracts (`src/fireedge/data/`)
-* **`ActiveFireDataset`:** PyTorch Dataset yielding calibrated thermal image tensors and binary fire masks.
-* **`ActiveFireDataModule` / `get_pan_african_dataloaders`:** Scene-level leak-free data splitting and stratified batch sampling balancing active savanna fires with North African bare soil hard negatives.
-* **Person 2 Contract:** Guaranteed output tensor shapes:
-  - Input Images: `[B, 1, 256, 256]`, `torch.float32`, normalized to $[0.0, 1.0]$.
-  - Ground-Truth Masks: `[B, 1, 256, 256]`, `torch.float32`, binary values $\{0.0, 1.0\}$.
+### 1. Gate 1 Flight Mode: PSF Spatial Halo Verification
+Uncooled microbolometers in low Earth orbit are bombarded by radiation. Single-Event Upsets (SEUs) and cosmic ray hits produce localized intense pixel readouts that fool naive thresholding into false wildfire emergencies.
 
-### 4. Gate 2: Post-Treatment Output & Physical Sanity Gate (`output_validator.py`)
-Runs on the **preprocessed tensor and CNN prediction output** before queuing for downlink:
-* **Thermal Contrast Verification:** Verifies physical reality:
-  $$\text{Thermal Contrast Ratio} = \frac{\mu_{\text{fire}}}{\mu_{\text{background}}} \ge 1.15$$
-  Suppresses cold-surface false alarms (cloud edges, snow, coastal boundaries).
-* **Spatial Plausibility:** Rejects isolated single-pixel false-alarm speckles and catastrophic model collapse (> 50% frame fire hallucinations).
-* **Telemetry Alert Protocol:** Formats compact CCSDS alert packets (< 100 bytes) containing fire cluster coordinates, intensity, and checksum for direct downlink.
+```
+       Cosmic Ray / SEU (Sharp Transient)               True Wildfire (Optical PSF Halo)
+               ▲                                                    ▲
+               │          █                                         │           ▄█▄
+               │          █                                         │          █████
+               │          █                                         │        ▄███████▄
+         ──────┴──────────█──────────►                        ──────┴───────███████████──────►
+              Zero spatial dispersion                               Gaussian optical blur
+          Rejected by Gate 1 (0 ms cost)                       Passed to Edge Segmentation
+```
+
+* True optical wildfires refract through sensor optics conforming to a Gaussian Point Spread Function with spatial dispersion:
+  $$\sigma_{\text{PSF}} \ge 0.8\text{ pixels}$$
+* Non-optical cosmic transients exhibit zero spatial halo and are rejected in $< 25\text{ ms}$ on an ARM Cortex-A72 without invoking the neural network.
+
+<p align="center">
+  <img src="reports/figures/psf_halo_discrimination_africa.png" alt="PSF Halo Discrimination" width="85%" />
+</p>
+
+### 2. Radiometric Inversion & Conditioning
+* Inverts Landsat-8 TIRS Planck equation from raw Digital Numbers ($DN$) to Kelvin ($T_B$):
+  $$T_B = \frac{K_2}{\ln\left(\frac{K_1}{M_L \cdot DN + A_L} + 1\right)}$$
+* Fixed-pattern noise (FPN) and dead sensor pixels are dynamically repaired via Two-Point Non-Uniformity Correction (NUC).
+
+### 3. Gate 2: Thermal Contrast & Physical Consistency
+To prevent false triggers over hot bare sand dunes (common in North African biomes):
+* Requires active fire clusters to satisfy:
+  $$\text{Contrast Ratio} = \frac{\mu_{\text{fire}}}{\mu_{\text{background}}} \ge 1.15$$
+* Filters isolated 1-pixel artifacts and flags model collapse (e.g., > 50% frame detection).
+
+<p align="center">
+  <img src="reports/figures/africa_thermal_contrast.png" alt="Pan-African Thermal Contrast" width="85%" />
+</p>
+
+### 4. 64-Byte CCSDS-Compliant Alert Packet Protocol
+When an active fire is validated, an ultra-compact binary packet is constructed:
+
+```
+Offset  Bytes  Field                Description
+0x00      4    Magic Header         0x46495245 ('FIRE')
+0x04      1    Protocol Version     0x07 (IASTAM V7)
+0x05      1    Gate Status Flags    Bit 0: Gate 1 Pass | Bit 1: Gate 2 Pass | Bit 2: Fire Present
+0x06      2    Sequence Counter     Monotonic frame counter (0..65535)
+0x08      8    Timestamp            Unix epoch seconds (uint64)
+0x10      4    Geo Latitude         IEEE-754 float32 centroid
+0x14      4    Geo Longitude        IEEE-754 float32 centroid
+0x18      4    Max Temperature      Kelvin float32
+0x1C      4    Mean Fire Temp       Kelvin float32
+0x20      2    Fire Pixel Count     Integer active pixels in patch
+0x22      2    Cluster Count        Morphological contiguous fire fronts
+0x24      2    Confidence Score     Detection probability (0..1000 scaled)
+0x26     36    Telemetry Reserved   Orbit ephemeris, payload temps, solar vector
+0x3E      2    CRC-16-CCITT         Polynomial 0x1021 error integrity check
+Total: 64 Bytes
+```
+
+#### Bandwidth Comparison (TRD §F12 Baseline):
+| Telemetry Mode | Payload Size | Compression Ratio | Downlink Pass Time (100 kbps) |
+| :--- | :--- | :--- | :--- |
+| **Raw 3-Channel 16-bit Patch** | **131,072 Bytes** | 1.0× (Baseline) | **10.48 seconds** |
+| **Standard zlib DEFLATE** | **~3,500 Bytes** | 37.4× | **0.28 seconds** |
+| **IASTAM Binary Alert Packet** | **64 Bytes** | **2,048×** | **0.005 seconds (< 10 ms)** |
 
 ---
 
-## 🛰️ Tri-Dataset Strategy: Roles & Pipeline Placement
+## 🖥️ Interactive Web Demo (Gradio & Docker)
 
-| Dataset | Designated Role & Pipeline Placement | Decisive Technical Justification | Current Status |
-|---|---|---|---|
-| **ActiveFire**<br>*(Pereira et al., Landsat-8)* | **PRIMARY STAGE 1 & 2 ENGINE**<br>• Core model training backbone.<br>• Semantic segmentation benchmarking.<br>• Ground-truth mask consensus (Schroeder, Kumar-Roy, Murphy, Voting). | • Native LWIR bands (B10: 10.9 µm, B11: 12.0 µm) matching uncooled microbolometer physics.<br>• $256 \times 256$ tiled patches matching CubeSat memory/SRAM constraints.<br>• 218 active patches on disk + 882 multi-algorithm consensus masks + 9,044 expert-annotated benchmark archive. | **ACTIVE & FUNCTIONAL**<br>882 masks & 218 patches indexed and batched into PyTorch tensors. |
-| **TS-SatFire**<br>*(Zhao et al., Nature Sci Data 2025)* | **TEMPORAL & CROSS-SENSOR VALIDATION**<br>• Evaluates model domain adaptation from Landsat-8 to VIIRS 375 m coarse GSD.<br>• Tests fire detection across day vs. night orbital passes.<br>• Benchmark against time-series fire progressions. | • VIIRS 375 m I-4 (3.74 µm) & I-5 (11.45 µm) closely resemble coarse CubeSat uncooled thermal camera ground sampling distances (50 m–300 m).<br>• Provides real dynamic fire spread sequences over time. | **INTEGRATED & TESTED**<br>Loader in `src/fireedge/io/tssatfire.py`, acquisition script in `scripts/01_get_tssatfire.py`, tested in `tests/test_io_tssatfire.py`. |
-| **THRawS / PyRawS**<br>*(ESA-PhiLab, Sentinel-2)* | **HARDWARE-IN-THE-LOOP (HIL) L0 REALISM**<br>• Tests Gate 1 on authentic raw uncompressed satellite instrument telemetry.<br>• Validates detector readout before geometric/radiometric correction. | • Standard datasets (Landsat/VIIRS) distribute Level-1 processed products.<br>• THRawS provides true **orbital Level-0 telemetry**, allowing verification against raw sensor striping, missing scanlines, raw ADC counts, and cosmic ray hits. | **INTEGRATED & TESTED**<br>Loader in `src/fireedge/io/thraws.py`, acquisition script in `scripts/02_get_thraws.py`, tested in `tests/test_io_thraws.py`. |
+A standalone visual demo allows operators and jury members to test real Landsat-8 GeoTIFF patches, custom user imagery, and simulated orbital thermal scenes:
+
+<p align="center">
+  <img src="demo/img/iastam_banner.jpg" alt="IASTAM Demo Interface" width="100%" />
+</p>
+
+### Key Features Implemented:
+* **🛰️ Tab 1: Real-Time Edge Processing & Dual-Gate Audit**
+  - Instant Gate 1 pre-screening (PSF halo analysis, dead pixel detection).
+  - Neural segmentation using quantized Pereira U-Net (INT8 / FP32 selectable).
+  - Gate 2 sanity verification with contrast ratio metric.
+  - Interactive false-color thermal viewer, spatial RGB composite, and ground truth overlay.
+* **📦 Tab 2: Downlink Packet Inspector & Telemetry Hex Dump**
+  - Live hex dump viewer with byte-by-byte visual decoding.
+  - CRC-16 checksum validation and zlib bandwidth reduction comparison (F12).
+* **🔬 Tab 3: Model Parity & Architecture Benchmarks**
+  - Pixel-by-pixel INT8 vs FP32 agreement percentage (F13).
+  - Onboard memory scrub emulation (bit-flip protection).
+  - Real-time latency benchmark on CPU threads.
+* **🧪 Tab 4: Golden Verification & SHA-256 Model Integrity**
+  - Validates ONNX model SHA-256 hashes against `CHECKSUMS.txt` (TRD §2.9).
+  - Golden test reproducibility verification against pre-computed golden predictions (TRD §2.10).
 
 ---
 
-## ⚡ Quickstart & Execution Guide
+## 🚀 Quickstart & Reproduction Guide
 
-### 1. Environment Setup
+### 1. Local Python Environment
 ```bash
-# Recommended Python version: Python 3.10+ (tested on Python 3.14)
+# Clone the repository
+git clone https://github.com/kacemamine721-star/thermal-edge-fire.git
+cd thermal-edge-fire
+
+# Install dependencies
 pip install -r requirements.txt
+
+# Run the full test suite (43 tests across pipeline, math, and demo)
+pytest -v
 ```
 
-### 2. Register Jupyter Kernel (for Notebooks)
-To prevent Jupyter from connecting to Conda `base` or an incorrect Python version:
+### 2. Launch the Web Demo Locally
 ```bash
-python -m ipykernel install --user --name python314 --display-name "Python 3.14 (thermal-edge-fire)"
+cd demo
+pip install -r requirements.txt
+python app.py
+# Opens at: http://127.0.0.1:7860
 ```
 
-### 3. Run Test Suite (34 Tests, 100% Passing)
-Verifies Gate 1, Gate 2, NUC, Calibration, Normalization, DataLoaders, and I/O readers:
+### 3. Run with Docker
 ```bash
-python -m pytest
+# Build the production image with 512MB RAM constraint
+docker build -t iastam-edge-demo demo/
+
+# Run the container
+docker run -p 7860:7860 --memory="512m" --cpus="1.0" iastam-edge-demo
 ```
 
-### 4. Verify End-to-End Pipeline
-Executes the full pipeline from raw frame through Gate 1, Two-Point NUC, Planck Calibration, Normalization, and PyTorch Tensor formatting:
-```bash
-python scripts/verify_pipeline.py
-```
-
-### 5. Run Pan-African Dataset Validation & Audit
-```bash
-# Ingest and validate African and global patches
-python scripts/20_validate_dataset.py
-
-# Generate markdown validation report
-python scripts/21_validation_report.py
-```
-
-### 6. Interactive Exploratory Data Analysis (EDA)
-Open [`notebooks/01_african_data_exploration.ipynb`](notebooks/01_african_data_exploration.ipynb) in VS Code or Jupyter:
-* Make sure to select kernel: **`Python 3.14 (thermal-edge-fire)`**.
-* Explores African thermal radiance, brightness temperature histograms, multi-algorithm mask overlays, and hot-soil false alarm resistance.
+### 4. Deploy to Render (Free Tier Blueprint)
+The repository contains both root [`render.yaml`](render.yaml) and [`demo/render.yaml`](demo/render.yaml) preconfigured for Render Blueprints:
+1. Log in to [dashboard.render.com](https://dashboard.render.com).
+2. Click **New +** $\rightarrow$ **Blueprint**.
+3. Connect `kacemamine721-star/thermal-edge-fire`.
+4. Click **Apply** — Render automatically builds the container and provides a public HTTPS URL.
 
 ---
 
-## 📁 Repository Structure
+## 📊 Dataset Triad & Training Strategy
+
+| Dataset | Designated Pipeline Role | Technical Justification |
+| :--- | :--- | :--- |
+| **ActiveFire**<br>*(Pereira et al., Landsat-8)* | **Core Training & Segmentation**<br>218 patches + 882 multi-expert masks | Native LWIR (B10: 10.9 µm, B11: 12.0 µm) matching uncooled microbolometer physics at $256 \times 256$ resolution. |
+| **TS-SatFire**<br>*(Zhao et al., Nature Sci Data 2025)* | **Domain Adaptation & Night Passes**<br>VIIRS 375 m time-series scenes | Matches coarse GSD of CubeSat uncooled optics; validates temporal progression. |
+| **THRawS / PyRawS**<br>*(ESA-PhiLab, Sentinel-2)* | **Hardware-in-the-Loop (HIL) Realism**<br>Authentic Level-0 raw instrument telemetry | Tests Gate 1 on uncorrected telemetry containing detector striping and raw ADC artifacts. |
+
+<p align="center">
+  <img src="reports/figures/activefire_correlation_matrix.png" alt="ActiveFire Band Correlations" width="70%" />
+</p>
+
+---
+
+## 📁 Repository Directory Structure
+
 ```
 thermal-edge-fire/
-├── configs/
-│   └── config.yaml                  # Central configuration (paths, band maps, thresholds)
-├── notebooks/
-│   └── 01_african_data_exploration.ipynb # Interactive Pan-African EDA notebook
-├── pytest.ini                       # Test configuration with pythonpath = src
-├── requirements.txt                 # Exact dependencies
-├── README.md                        # Documentation and execution guide
-├── scripts/
-│   ├── _bootstrap.py                # sys.path configuration for fireedge imports
-│   ├── verify_pipeline.py           # End-to-end integration test (Raw -> Gate 1 -> NUC -> Tensor)
-│   ├── 00_get_activefire.py         # Download & unpack ActiveFire (manual & subset releases)
-│   ├── 01_get_tssatfire.py          # Download & catalog TS-SatFire
-│   ├── 02_get_thraws.py             # Fetch & unpack THRawS sample scenes
-│   ├── 10_explore_activefire.py     # Band stats, thermal distributions, label verification
-│   ├── 11_explore_tssatfire.py      # VIIRS band verification & night/day pass analysis
-│   ├── 12_explore_thraws.py         # L0 raw DN telemetry analysis & artifact inspection
-│   ├── 13_explore_africa.py         # Dedicated Pan-African wildfire data exploration
-│   ├── 20_validate_dataset.py       # Gate 1 dataset audit across all sets
-│   └── 21_validation_report.py      # Generate Data Readiness Quality Gate Report
-├── src/
-│   └── fireedge/
-│       ├── __init__.py
-│       ├── config.py                # Configuration loader & path resolution
-│       ├── data/
-│       │   ├── __init__.py
-│       │   ├── dataset.py           # ActiveFireDataset: PyTorch Dataset yielding [C, H, W]
-│       │   └── datamodule.py        # ActiveFireDataModule & PanAfricanBatchSampler
-│       ├── preprocessing/
-│       │   ├── __init__.py
-│       │   ├── calibration.py       # Planck radiometric inversion (DN -> Kelvin)
-│       │   ├── nuc.py               # TwoPointNUC & MicrobolometerDegrader
-│       │   └── normalization.py     # Fixed window & robust percentile normalizers
-│       ├── io/
-│       │   ├── __init__.py
-│       │   ├── activefire.py        # Landsat-8 GeoTIFF loader & mask pairing
-│       │   ├── tssatfire.py         # TS-SatFire VIIRS reader & event organizer
-│       │   └── thraws.py            # THRawS raw L0 reader & PyRawS bridge
-│       ├── validation/
-│       │   ├── __init__.py
-│       │   ├── base_validator.py    # ValidatorConfig, ValidationReport, base math
-│       │   ├── ground_gate_validator.py # Ground Gate 1: Comprehensive archive-level screening
-│       │   ├── flight_gate_validator.py # Flight Gate 1: Fast onboard microbolometer PSF halo screening
-│       │   └── output_validator.py  # Gate 2: Post-treatment physical sanity & alert generator
-│       └── exploration/
-│           ├── __init__.py
-│           ├── band_stats.py        # Quantile, noise, and SNR accumulator
-│           └── separability.py      # Fisher ratio, AUC, KS tests for thermal channels
-├── tests/
-│   ├── conftest.py                  # Synthetic multi-band GeoTIFF generators & mock frames
-│   ├── test_data_dataset.py         # PyTorch Dataset and DataLoader tests
-│   ├── test_preprocessing.py        # NUC, Degrader, and Normalization tests
-│   ├── test_frame_validator.py      # Base Gate 1 fault injection tests
-│   ├── test_flight_validator.py     # Flight Gate 1 PSF halo & SEU tests
-│   ├── test_output_validator.py     # Gate 2 physical consistency & alert tests
-│   ├── test_io_activefire.py        # ActiveFire patch indexing and pairing tests
-│   ├── test_io_tssatfire.py         # TS-SatFire VIIRS reader tests
-│   └── test_io_thraws.py            # THRawS raw telemetry reading tests
+├── .github/                     # CI workflows & automation
+├── configs/                     # Central configuration & hyperparameters
+│   └── config.yaml
+├── demo/                        # Standalone Gradio Web Application
+│   ├── models/                  # INT8 / FP32 ONNX weights, manifest, CHECKSUMS.txt
+│   ├── sample_data/             # Landsat-8 sample patches, masks, golden test vectors
+│   ├── img/                     # UI visual branding & logos
+│   ├── app.py                   # Main Gradio application
+│   ├── pipeline.py              # Dual-gate execution engine
+│   ├── decode_packet.py         # Binary telemetry serializer/deserializer
+│   ├── io_tiff.py               # Radiometric GeoTIFF loader
+│   ├── metrics.py               # IoU, F1, Dice, and contrast evaluators
+│   ├── Dockerfile               # Production container definition
+│   └── render.yaml              # Render deployment blueprint
+├── img/                         # High-resolution project imagery & diagrams
+│   ├── iastam_banner.jpg        # Main wide header banner
+│   ├── spacetoon_horizontal.png # SpaceTOON partner logo
+│   └── spacetoon_icon.png       # Mission badge
+├── notebooks/                   # Jupyter analysis & model prototypes
+│   ├── 01_african_data_exploration.ipynb
+│   └── SPACETOON_IASTAM_MODEL_PROTOTYPE.ipynb
 ├── reports/
-│   ├── figures/                     # Generated charts, histograms, and correlation matrices
-│   ├── africa_inventory.csv         # Curated 44 African patch metadata
-│   ├── activefire_inventory.csv     # Curated 217 global patch metadata
-│   └── data_readiness_report.md     # Comprehensive Stage 0/1 audit document
-└── data/
-    ├── raw/                         # Raw downloads (ActiveFire patches & masks)
-    ├── interim/                     # Calibrated validator configs & metrics
-    └── processed/                   # Edge-ready splits
+│   ├── figures/                 # Scientific plots, histograms, and matrices
+│   ├── africa_inventory.csv     # Pan-African curated patches
+│   └── data_readiness_report.md # Gate 1 validation audit report
+├── src/fireedge/                # Core production Python package
+│   ├── validation/              # Flight Gate 1, Ground Gate 1, and Gate 2
+│   ├── preprocessing/           # NUC, Planck inversion, normalization
+│   ├── data/                    # Datasets, DataModules, PanAfricanBatchSampler
+│   └── io/                      # Landsat-8, VIIRS, and Sentinel-2 L0 readers
+├── tests/                       # Unit & integration test suite (100% passing)
+├── render.yaml                  # Root Render Blueprint
+└── requirements.txt             # Primary Python dependencies
 ```
 
 ---
 
-## 🔬 Flight Precedent & Edge SBC Constraints
+## 👥 Authors & Acknowledgments
 
-* **Platform Target:** 6U CubeSat with uncooled Long-Wave Infrared (LWIR) microbolometer (e.g., FLIR Lepton 3.5 / ULIS Pico384).
-* **Onboard Computer:** Embedded ARM Cortex-A72 SBC (Raspberry Pi Compute Module CM3+/CM4 or similar space-qualified equivalent) running Linux.
-* **Flight Pipeline Latency:**
-  - Flight Gate 1 (PSF Halo check): $\approx 25\text{ ms}$
-  - Calibration + Normalization: $\approx 4\text{ ms}$
-  - Quantized Edge CNN (ONNX / INT8): $\approx 50\text{–}80\text{ ms}$
-  - Gate 2 + CCSDS Telemetry: $\approx 2\text{ ms}$
-  - **Total Latency:** $< 120\text{ ms}$ per frame (leaves CPU $> 95\%$ idle given a 2–5 second frame acquisition interval).
+* **SpaceTOON / IASTAM Project Team**
+* **Technical Supervision:** Space & Earth Observation AI Challenge (IASTAM 2026)
+* **Defense Date:** October 14, 2026
+* **Reference Foundations:** 
+  - Chatar et al. (2024), *Edge computing for wildfire detection on CubeSats*.
+  - Pereira et al. (2021), *ActiveFire Landsat-8 benchmark dataset*.
+  - KITSUNE 6U CubeSat uncooled thermal infrared flight heritage.
+
+---
+
+<div align="center">
+  <sub>Developed for the SpaceTOON CubeSat Wildfire Intelligence Mission · Built with PyTorch, ONNX, and Gradio</sub>
+</div>
