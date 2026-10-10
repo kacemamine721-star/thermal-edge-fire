@@ -149,7 +149,7 @@ Total: 64 Bytes
 
 ---
 
-## 🖥️ Interactive Web Demo (Streamlit & Docker)
+## 🖥️ Interactive Web Demo (Gradio & Docker)
 
 A standalone visual demo allows operators and jury members to test real Landsat-8 GeoTIFF patches, custom user imagery, and simulated orbital thermal scenes:
 
@@ -195,8 +195,8 @@ pytest -v
 ```bash
 cd demo
 pip install -r requirements.txt
-streamlit run app.py
-# Opens at: http://localhost:8501
+python app.py
+# Opens at: http://127.0.0.1:7860
 ```
 
 ### 3. Run with Docker
@@ -205,7 +205,7 @@ streamlit run app.py
 docker build -t iastam-edge-demo demo/
 
 # Run the container
-docker run -p 8501:8501 --memory="512m" --cpus="1.0" iastam-edge-demo
+docker run -p 7860:7860 --memory="512m" --cpus="1.0" iastam-edge-demo
 ```
 
 ---
@@ -232,11 +232,11 @@ thermal-edge-fire/
 │   └── MODEL_ARCHITECTURE.md    # 6-Stage Edge Pipeline & Quantization Dossier
 ├── configs/                     # Central configuration & hyperparameters
 │   └── config.yaml
-├── demo/                        # Standalone Streamlit Web Application
+├── demo/                        # Standalone Gradio Web Application
 │   ├── models/                  # INT8 / FP32 ONNX weights, manifest, CHECKSUMS.txt
 │   ├── sample_data/             # Landsat-8 sample patches, masks, golden test vectors
 │   ├── img/                     # UI visual branding & logos
-│   ├── app.py                   # Main Streamlit application
+│   ├── app.py                   # Main Gradio application
 │   ├── pipeline.py              # Dual-gate execution engine
 │   ├── decode_packet.py         # Binary telemetry serializer/deserializer
 │   ├── io_tiff.py               # Radiometric GeoTIFF loader
@@ -282,5 +282,5 @@ thermal-edge-fire/
 ---
 
 <div align="center">
-  <sub>Developed for the SpaceTOON CubeSat Wildfire Intelligence Mission · Built with PyTorch, ONNX, and Streamlit</sub>
+  <sub>Developed for the SpaceTOON CubeSat Wildfire Intelligence Mission · Built with PyTorch, ONNX, and Gradio</sub>
 </div>

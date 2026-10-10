@@ -12,6 +12,7 @@ Produces aerospace-grade visualization outputs:
 
 from __future__ import annotations
 
+import gc
 import io
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -82,8 +83,12 @@ def make_heatmap(prob_map: np.ndarray) -> np.ndarray:
     buf = io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches="tight", facecolor=COLOR_BG, edgecolor="none")
     plt.close(fig)
+    plt.close("all")
     buf.seek(0)
-    return np.array(Image.open(buf).convert("RGB"))
+    with Image.open(buf) as im:
+        img_arr = np.array(im.convert("RGB"))
+    buf.close()
+    return img_arr
 
 
 def make_binary_mask_img(binary_mask: np.ndarray, threshold: float = 0.96) -> np.ndarray:
@@ -102,8 +107,12 @@ def make_binary_mask_img(binary_mask: np.ndarray, threshold: float = 0.96) -> np
     buf = io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches="tight", facecolor=COLOR_BG, edgecolor="none")
     plt.close(fig)
+    plt.close("all")
     buf.seek(0)
-    return np.array(Image.open(buf).convert("RGB"))
+    with Image.open(buf) as im:
+        img_arr = np.array(im.convert("RGB"))
+    buf.close()
+    return img_arr
 
 
 def make_overlay(false_color: np.ndarray, binary_mask: np.ndarray,
@@ -147,8 +156,12 @@ def make_overlay(false_color: np.ndarray, binary_mask: np.ndarray,
     buf = io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches="tight", facecolor=COLOR_BG, edgecolor="none")
     plt.close(fig)
+    plt.close("all")
     buf.seek(0)
-    return np.array(Image.open(buf).convert("RGB"))
+    with Image.open(buf) as im:
+        img_arr = np.array(im.convert("RGB"))
+    buf.close()
+    return img_arr
 
 
 def make_gt_comparison(pred_mask: np.ndarray, gt_mask: np.ndarray) -> np.ndarray:
@@ -189,5 +202,10 @@ def make_gt_comparison(pred_mask: np.ndarray, gt_mask: np.ndarray) -> np.ndarray
     buf = io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches="tight", facecolor=COLOR_BG, edgecolor="none")
     plt.close(fig)
+    plt.close("all")
     buf.seek(0)
-    return np.array(Image.open(buf).convert("RGB"))
+    with Image.open(buf) as im:
+        img_arr = np.array(im.convert("RGB"))
+    buf.close()
+    gc.collect()
+    return img_arr

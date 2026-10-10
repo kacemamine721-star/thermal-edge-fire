@@ -204,8 +204,14 @@ def preprocess_dn(dn: np.ndarray) -> np.ndarray:
 class InferenceEngine:
     def __init__(self, model_path: str, num_threads: int = 1):
         so = ort.SessionOptions()
-        so.intra_op_num_threads = int(num_threads)
-        so.inter_op_num_threads = int(num_threads)
+        # In cloud containers (Render 512MB RAM / CFS quota), force 1 thread to avoid thread contention
+        if num_threads <= 0 and (os.environ.get("RENDER") or os.environ.get("RENDER_INSTANCE_ID")):
+            num_threads = 1
+        eff_threads = max(1, int(num_threads)) if num_threads > 0 else 1
+        so.intra_op_num_threads = eff_threads
+        so.inter_op_num_threads = eff_threads
+        # Prevent ONNX Runtime from pre-allocating a huge memory arena (saves ~80-120MB RAM)
+        so.enable_cpu_mem_arena = False
         self.session = ort.InferenceSession(str(model_path), so, providers=['CPUExecutionProvider'])
         self.input_name = self.session.get_inputs()[0].name
         # Warmup run
