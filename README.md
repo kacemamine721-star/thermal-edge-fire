@@ -33,6 +33,9 @@ Modern Earth-Observation CubeSats equipped with Long-Wave Infrared (LWIR) microb
 
 ## 🏛️ System Architecture: Dual-Gate Validation Pipeline
 
+> 📄 **Full Engineering Dossier:** Detailed flight math, error bounds, and hardware benchmarks are available in [`docs/MODEL_ARCHITECTURE.md`](docs/MODEL_ARCHITECTURE.md).  
+> 📓 **Production Training & Quantization Pipeline:** Complete reproducible training, temperature scaling, and INT8 ONNX export in [`notebooks/03_SPACETOON_IASTAM_MODEL_PROTOTYPE_PHASE3.ipynb`](notebooks/03_SPACETOON_IASTAM_MODEL_PROTOTYPE_PHASE3.ipynb).
+
 The core innovation of the IASTAM architecture is that treatment (Planck calibration, NUC, neural network inference) is bounded by rigorous, deterministic guards **before** and **after** compute-intensive steps:
 
 ```
@@ -146,7 +149,7 @@ Total: 64 Bytes
 
 ---
 
-## 🖥️ Interactive Web Demo (Gradio & Docker)
+## 🖥️ Interactive Web Demo (Streamlit & Docker)
 
 A standalone visual demo allows operators and jury members to test real Landsat-8 GeoTIFF patches, custom user imagery, and simulated orbital thermal scenes:
 
@@ -192,8 +195,8 @@ pytest -v
 ```bash
 cd demo
 pip install -r requirements.txt
-python app.py
-# Opens at: http://127.0.0.1:7860
+streamlit run app.py
+# Opens at: http://localhost:8501
 ```
 
 ### 3. Run with Docker
@@ -202,15 +205,8 @@ python app.py
 docker build -t iastam-edge-demo demo/
 
 # Run the container
-docker run -p 7860:7860 --memory="512m" --cpus="1.0" iastam-edge-demo
+docker run -p 8501:8501 --memory="512m" --cpus="1.0" iastam-edge-demo
 ```
-
-### 4. Deploy to Render (Free Tier Blueprint)
-The repository contains both root [`render.yaml`](render.yaml) and [`demo/render.yaml`](demo/render.yaml) preconfigured for Render Blueprints:
-1. Log in to [dashboard.render.com](https://dashboard.render.com).
-2. Click **New +** $\rightarrow$ **Blueprint**.
-3. Connect `kacemamine721-star/thermal-edge-fire`.
-4. Click **Apply** — Render automatically builds the container and provides a public HTTPS URL.
 
 ---
 
@@ -232,14 +228,15 @@ The repository contains both root [`render.yaml`](render.yaml) and [`demo/render
 
 ```
 thermal-edge-fire/
-├── .github/                     # CI workflows & automation
+├── docs/                        # Engineering Specifications & Flight Dossier
+│   └── MODEL_ARCHITECTURE.md    # 6-Stage Edge Pipeline & Quantization Dossier
 ├── configs/                     # Central configuration & hyperparameters
 │   └── config.yaml
-├── demo/                        # Standalone Gradio Web Application
+├── demo/                        # Standalone Streamlit Web Application
 │   ├── models/                  # INT8 / FP32 ONNX weights, manifest, CHECKSUMS.txt
 │   ├── sample_data/             # Landsat-8 sample patches, masks, golden test vectors
 │   ├── img/                     # UI visual branding & logos
-│   ├── app.py                   # Main Gradio application
+│   ├── app.py                   # Main Streamlit application
 │   ├── pipeline.py              # Dual-gate execution engine
 │   ├── decode_packet.py         # Binary telemetry serializer/deserializer
 │   ├── io_tiff.py               # Radiometric GeoTIFF loader
@@ -250,13 +247,16 @@ thermal-edge-fire/
 │   ├── iastam_banner.jpg        # Main wide header banner
 │   ├── spacetoon_horizontal.png # SpaceTOON partner logo
 │   └── spacetoon_icon.png       # Mission badge
-├── notebooks/                   # Jupyter analysis & model prototypes
-│   ├── 01_african_data_exploration.ipynb
-│   └── SPACETOON_IASTAM_MODEL_PROTOTYPE.ipynb
+├── notebooks/                   # Jupyter analysis & model pipelines
+│   ├── 01_african_data_exploration.ipynb                   # Pan-African Landsat-8 exploration
+│   ├── 02_SPACETOON_IASTAM_MODEL_PROTOTYPE_PHASE2.ipynb   # Phase 2 early prototype
+│   └── 03_SPACETOON_IASTAM_MODEL_PROTOTYPE_PHASE3.ipynb   # Phase 3 production training & ONNX export
 ├── reports/
 │   ├── figures/                 # Scientific plots, histograms, and matrices
+│   ├── model_benchmarks/        # Final model latency, F1, and zero-shot benchmark CSVs
 │   ├── africa_inventory.csv     # Pan-African curated patches
 │   └── data_readiness_report.md # Gate 1 validation audit report
+├── scripts/                     # Automated data extraction & verification scripts
 ├── src/fireedge/                # Core production Python package
 │   ├── validation/              # Flight Gate 1, Ground Gate 1, and Gate 2
 │   ├── preprocessing/           # NUC, Planck inversion, normalization
@@ -271,16 +271,16 @@ thermal-edge-fire/
 
 ## 👥 Authors & Acknowledgments
 
-* **SpaceTOON / IASTAM Project Team**
+* **SpaceTOON / IASTAM Project Team** : Rahma Trabelsi, Amine Kacem, Sahar Feki, Yessmine Chaabouni, Khaled Cheniour
 * **Technical Supervision:** Space & Earth Observation AI Challenge (IASTAM 2026)
-* **Defense Date:** October 14, 2026
+* **Defense Date:** October 15, 2026
 * **Reference Foundations:** 
   - Chatar et al. (2024), *Edge computing for wildfire detection on CubeSats*.
   - Pereira et al. (2021), *ActiveFire Landsat-8 benchmark dataset*.
-  - KITSUNE 6U CubeSat uncooled thermal infrared flight heritage.
+  - M. H. bin Azami, N. C. Orger, V. H. Schulz, T. Oshiro, and M. Cho, "Earth Observation Mission of a 6U CubeSat with a 5-Meter Resolution for Wildfire Image Classification Using Convolution Neural Network Approach," Remote Sensing, vol. 14, no. 8, p. 1874, Apr. 2022. DOI: 10.3390/rs14081874
 
 ---
 
 <div align="center">
-  <sub>Developed for the SpaceTOON CubeSat Wildfire Intelligence Mission · Built with PyTorch, ONNX, and Gradio</sub>
+  <sub>Developed for the SpaceTOON CubeSat Wildfire Intelligence Mission · Built with PyTorch, ONNX, and Streamlit</sub>
 </div>

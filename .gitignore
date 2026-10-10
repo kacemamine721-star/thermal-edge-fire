@@ -17,9 +17,13 @@ data/processed/
 *.npz
 *.zarr
 
-# ── Generated reports & figures (reproducible from scripts) ───
-reports/figures/
-reports/*.csv
+# ── Figures, Reports & Benchmarks Whitelist ───────────────────
+!reports/figures/
+!reports/figures/*
+!reports/*.md
+!reports/*.csv
+!reports/model_benchmarks/
+!reports/model_benchmarks/*
 !reports/.gitkeep
 
 # ── Python ────────────────────────────────────────────────────
@@ -67,21 +71,25 @@ Thumbs.db
 Desktop.ini
 ehthumbs.db
 
-# ── Logs & temporary files ────────────────────────────────────
+# ── Logs, databases & temporary files ─────────────────────────
 *.log
 *.tmp
 *.bak
 *.orig
+*.db
+*.sqlite
+*.sqlite3
 
-# ── Model artifacts (trained weights — will come later) ───────
+# ── Model artifacts (raw/intermediate weights) ────────────────
 models/
 checkpoints/
+epoch_checkpoints/
 *.pt
 *.pth
 *.onnx
 *.tflite
 
-# ── Misc ──────────────────────────────────────────────────────
+# ── Misc archives ─────────────────────────────────────────────
 .env
 *.zip
 *.tar.gz
@@ -94,4 +102,3 @@ checkpoints/
 !demo/sample_data/
 !demo/sample_data/*
 !demo/sample_data/**
-
