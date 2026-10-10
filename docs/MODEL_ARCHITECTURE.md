@@ -1,4 +1,4 @@
-# IASTAM — Final Production Model Technical Documentation
+# IASTAM : Final Production Model Technical Documentation
 ## Edge-Native Deep Learning Pipeline for Spaceborne Active Wildfire Detection on 6U CubeSats
 
 > **Document Status**: Official Engineering Specification & Technical Evaluation Dossier  
@@ -294,19 +294,7 @@ $$\text{Raw Tile Size} = 3\text{ bands} \times 256 \times 256 \times 2\text{ byt
 
 **Key Takeaway**: Under 50% link stress, Policy A (Priority + SQLite Persistence) delivers **87.6% of critical wildfire alerts** with **0 lost packets**, whereas FIFO delivers only **33.6%**.
 
-## 13. Technical Defense & Frequently Asked Questions for the Jury
 
-### Q1: Why was Thermal Band B10 removed in favor of SWIR?
-> **Answer**: Flaming wildfires emit maximum radiance at 2.2 μm (SWIR2) per Wien's law, whereas ambient Earth emits at 10.9 μm (TIR). At 30 m GSD, sub-pixel fires yield an empirical AUC of 0.993 in SWIR2 versus only 0.865 in TIR. Adding B10 actually degraded precision from 0.958 to 0.944 due to solar-heated ground artifacts, while eliminating B10 saves 25% payload mass and >3 W of power.
-
-### Q2: Does the model meet onboard CubeSat compute limits?
-> **Answer**: Yes. The INT8 quantized model is only 514.8 KiB, fitting into processor L2/L3 cache. Host inference takes 58.4 ms (64.4 ms full pipeline), yielding 15.2 FPS and a 35.6% computational margin under the 100 ms push-broom interval.
-
-### Q3: How is the 8,192x data reduction verified?
-> **Answer**: A raw 3-band uint16 tile is 393,216 bytes. A single-event alert packet is exactly 48 bytes (17 B header + 27 B event record + 4 B CRC32). 393,216 / 48 = 8,192.0x. Across 1,500 real satellite tiles including periodic 21-byte heartbeats, the measured reduction is 6,234.99x.
-
-### Q4: How are false alarms from solar glint, clouds, and radiation handled?
-> **Answer**: The Blue band (C2) enables visual disambiguation of reflective clouds and bright sand; Gate 1 scrubs radiation-induced single-pixel spikes; and our conservative operating threshold (0.96) ensures a 0.0% false alarm rate on human-annotated scenes.
 
 ---
 *Compiled for IASTAM Technical Report & Defense. All values empirically grounded in final production test outputs.*

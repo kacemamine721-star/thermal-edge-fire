@@ -553,13 +553,13 @@ def run_inference(
 | Parameter | Value | Downlink Meaning |
 | :--- | :---: | :--- |
 | **Raw Input Size** | **{raw_bytes:,} Bytes** ({raw_bytes/1024:.1f} KiB) | 3 bands × 256² × 16-bit uint16 (raw multi-spectral frame) |
-| **Lossless zlib Compression (F12)** | **{zlib_bytes:,} Bytes** ({zlib_bytes/1024:.1f} KiB) | Lossless baseline (`{zlib_ratio:.2f}×` ratio · `{zlib_ms:.2f} ms`) |
+| **Lossless zlib Compression** | **{zlib_bytes:,} Bytes** ({zlib_bytes/1024:.1f} KiB) | Lossless baseline (`{zlib_ratio:.2f}×` ratio · `{zlib_ms:.2f} ms`) |
 | **IASTAM Binary Alert Packet** | **{packet_size} Bytes** | Compact Binary Alert Packet (Header + Events + CRC32) |
 | **Bandwidth Reduction (vs Raw)** | **`{reduction_ratio:,.0f}×`** | **Total space-to-ground downlink data saved** |
-| **Edge Advantage (vs zlib) (F12)** | **`{alert_vs_zlib_x:,.0f}× smaller`** | **`{zlib_savings_pct:.1f}%` saved over lossless image compression** |
+| **Edge Advantage (vs zlib)** | **`{alert_vs_zlib_x:,.0f}× smaller`** | **`{zlib_savings_pct:.1f}%` saved over lossless image compression** |
 | **Events Detected** | **{len(events)}** | {'Transmitted top 6 in alert' if len(events)>6 else 'All clusters encoded'} |
 
-> **Information Extraction vs Blind Compression (F12)**:  
+> **Information Extraction vs Blind Compression**:  
 > Lossless image compression (`zlib`) preserves raw sensor noise and only achieves **{zlib_ratio:.2f}×** reduction ({zlib_bytes/1024:.1f} KiB), which still saturates low-bandwidth direct-to-ground satellite links. IASTAM semantic edge intelligence extracts structured tactical fire alerts (**{packet_size} Bytes**), reducing downlink requirements by **{reduction_ratio:,.0f}×** while providing actionable event coordinates within seconds.
 """
 
