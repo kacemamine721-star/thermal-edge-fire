@@ -253,7 +253,7 @@ def format_packet_dissector_md(packet_bytes: bytes, packet_json: Optional[Dict[s
     ts = int(packet_json.get("timestamp_ms", 0))
     ts_txt = f"{ts} ms since epoch" if ts else "0 (not provided: TIME_UNAVAILABLE)"
 
-    md = f"""### {SVG_TERMINAL} Protocol Dissector (Byte-by-Byte Translation for Jury)
+    md = f"""### {SVG_TERMINAL} Protocol Dissector (Byte-by-Byte Translation)
 | Byte Offset | Field Name | Hex Value | Decoded Meaning | Operational Purpose |
 | :---: | :--- | :---: | :--- | :--- |
 | `0x00` | **Magic Identifier** | `0xF1` | `IASTAM_PACKET` | Start-of-packet marker |
@@ -537,7 +537,7 @@ def run_inference(
         ev_metrics = compute_event_recall(events, gt_mask)
         gt_img = make_gt_comparison(binary_mask, gt_mask)
 
-        # Badges use exactly the reference values shown in the table (V7.1 test-split averages, rounded down).
+        # Badges use exactly the reference values shown in the table (Model test-split averages, rounded down).
         prec_badge = badge("AT/ABOVE REF", "optimal") if metrics['precision'] >= 0.950 else badge("BELOW REF", "margin")
         rec_badge = badge("AT/ABOVE REF", "optimal") if metrics['recall'] >= 0.940 else badge("BELOW REF", "margin")
         f1_badge = badge("AT/ABOVE REF", "optimal") if metrics['f1'] >= 0.945 else badge("BELOW REF", "margin")
@@ -545,7 +545,7 @@ def run_inference(
         ev_badge = badge("DETECTED", "optimal") if ev_metrics['event_recall'] == 1.0 else badge("PARTIAL", "margin")
 
         metrics_summary_md = f"""### {SVG_TARGET} Verification Metrics (vs Pereira voting mask: SWIR-algorithm labels, not field ground truth)
-| Metric | This image | V7.1 test-split reference (4,781 patches, rounded) | Status |
+| Metric | This image | Model test-split reference (4,781 patches, rounded) | Status |
 | :--- | :---: | :---: | :---: |
 | **Precision** | **{metrics['precision']:.4f}** | ≥ 0.950 | {prec_badge} |
 | **Recall** | **{metrics['recall']:.4f}** | ≥ 0.940 | {rec_badge} |
@@ -559,7 +559,7 @@ def run_inference(
             metrics_summary_md += f"""
 > **Mission Note on Single-Image Metrics**:  
 > Recall is **100.0%** (all {metrics['tp']} labelled fire pixels detected, none missed).  
-> The {metrics['fp']} extra pixels are predicted fire outside the voting mask. They may be flame-front pixels the 3-algorithm vote missed, or false positives; one image cannot tell which, and the voting masks are SWIR-algorithm output, not field ground truth. On the V7.1 test split (4,781 patches): precision **0.9575**, F1 **0.9493**.
+> The {metrics['fp']} extra pixels are predicted fire outside the voting mask. They may be flame-front pixels the 3-algorithm vote missed, or false positives; one image cannot tell which, and the voting masks are SWIR-algorithm output, not field ground truth. On the Model test split (4,781 patches): precision **0.9575**, F1 **0.9493**.
 """
     else:
         metrics_summary_md = f"""### {SVG_INFO} Operational Context
@@ -602,7 +602,7 @@ def run_inference(
 
     if ON_RENDER:
         telemetry_md += ("\n> **Shared cloud instance (Render free tier, 0.1 vCPU)**: these timings are not representative "
-                         "of the V7.1 host benchmark or of flight hardware. Run the demo locally for latency.\n")
+                         "of the Model host benchmark or of flight hardware. Run the demo locally for latency.\n")
 
     # 6. Data Reduction Panel Markdown (F12)
     reduction_md = f"""### {SVG_PACKAGE} Bandwidth & Downlink Reduction
@@ -691,7 +691,7 @@ def run_benchmark_30(model_variant: str, thread_mode: str, enable_scrub: bool):
     bench_md = f"""### {SVG_GAUGE} Live 30-Run Host-CPU Benchmark Results
 **Configuration**: `{model_variant}` · `{thread_mode}` → `{pipeline.engine.threads_label}` · `Gate1 Scrub: {enable_scrub}`
 
-| Metric | Measured on this machine | V7.1 reference (Kaggle x86 host) |
+| Metric | Measured on this machine | Model reference (Kaggle x86 host) |
 | :--- | :---: | :---: |
 | **Median Latency (p50)** | **`{p50:.2f} ms`** | 64.38 ms |
 | **95th Percentile (p95)** | **`{p95:.2f} ms`** | 77.68 ms |
