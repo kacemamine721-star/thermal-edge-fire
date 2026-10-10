@@ -21,7 +21,16 @@ import time
 import sys
 import zlib
 from pathlib import Path
+from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
+
+ON_RENDER = bool(os.environ.get("RENDER") or os.environ.get("RENDER_INSTANCE_ID"))
+os.environ.setdefault("GRADIO_ANALYTICS_ENABLED", "False")
+if ON_RENDER:
+    # Small containers: fewer BLAS/OpenMP threads and fewer malloc arenas mean less resident memory and less CPU contention.
+    for _k, _v in (("OMP_NUM_THREADS", "1"), ("OPENBLAS_NUM_THREADS", "1"), ("MKL_NUM_THREADS", "1"),
+                   ("MALLOC_ARENA_MAX", "2")):
+        os.environ.setdefault(_k, _v)
 
 # Cap GDAL block cache to 16 MB in C-heap to prevent container OOM on 512MB RAM limits
 os.environ["GDAL_CACHEMAX"] = "16"
@@ -82,15 +91,15 @@ MODELS_DIR = DEMO_DIR / "models"
 IMG_DIR = DEMO_DIR / "img" if (DEMO_DIR / "img").exists() else REPO_ROOT / "img"
 
 def get_image_data_uri(file_name: str) -> str:
-    """Encodes brand image to base64 data URI for bulletproof web display."""
-    file_path = IMG_DIR / file_name
-    if not file_path.exists():
-        alt_path = REPO_ROOT / "img" / file_name
-        if alt_path.exists():
-            file_path = alt_path
-        else:
-            return ""
-    mime = "image/jpeg" if file_path.suffix.lower() in [".jpg", ".jpeg"] else "image/png"
+    """Encodes a brand image as a base64 data URI. Prefers an optimised .webp sibling (about 6x smaller than the
+    original JPG/PNG: less data in every page load), falls back to the original file."""
+    stem = Path(file_name).stem
+    candidates = [IMG_DIR / f"{stem}.webp", REPO_ROOT / "img" / f"{stem}.webp",
+                  IMG_DIR / file_name, REPO_ROOT / "img" / file_name]
+    file_path = next((p for p in candidates if p.exists()), None)
+    if file_path is None:
+        return ""
+    mime = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}.get(file_path.suffix.lower(), "image/png")
     try:
         with open(file_path, "rb") as f:
             return f"data:{mime};base64,{base64.b64encode(f.read()).decode('ascii')}"
@@ -130,26 +139,52 @@ PRESET_SAMPLES = {
 }
 
 # ───────────────── Pipeline Cache ─────────────────
-_PIPELINE_CACHE: Dict[str, EndToEndPipeline] = {}
+_MAX_CACHED_PIPELINES = 1 if ON_RENDER else 2          # INT8 + FP32 locally (for the parity check), one on Render
+_PIPELINE_CACHE: "OrderedDict[str, EndToEndPipeline]" = OrderedDict()
+
+
+def log_rss(tag: str) -> None:
+    """Prints resident memory to the server log (always on Render, or locally with DEBUG_MEM=1)."""
+    if not (ON_RENDER or os.environ.get("DEBUG_MEM")):
+        return
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS"):
+                    print(f"[MEM] {tag}: {int(line.split()[1]) / 1024:.0f} MB", flush=True)
+                    return
+    except Exception:
+        pass
 
 
 def get_pipeline(model_variant: str = "INT8 (514 KiB)",
                  num_threads: int = 1,
                  gate1_scrub: bool = False,
-                 threshold: float = THRESHOLD_DEFAULT) -> EndToEndPipeline:
-    """Returns or creates a cached EndToEndPipeline instance."""
+                 threshold: float = THRESHOLD_DEFAULT,
+                 heartbeat_enabled: bool = False) -> EndToEndPipeline:
+    """Returns a cached EndToEndPipeline. The cache key is only (model file, thread count): threshold, Gate 1 scrub and
+    heartbeat are cheap runtime settings applied to the cached pipeline, so moving the slider no longer builds a new
+    ONNX session (a slow warm-up on a 0.1 vCPU instance). heartbeat_enabled=False: the demo judges each tile on its own;
+    the onboard 21 B heartbeat is a pipeline option, not a detection."""
     is_int8 = "INT8" in model_variant
     model_path = str(INT8_MODEL_PATH if is_int8 else FP32_MODEL_PATH)
-    cache_key = f"{model_path}_{num_threads}_{gate1_scrub}_{threshold}"
+    eff_threads = 1 if ON_RENDER else int(num_threads)
+    cache_key = f"{model_path}_{eff_threads}"
 
-    if cache_key not in _PIPELINE_CACHE:
-        _PIPELINE_CACHE[cache_key] = EndToEndPipeline(
-            model_path=model_path,
-            num_threads=num_threads,
-            threshold=threshold,
-            gate1_scrub=gate1_scrub
-        )
-    return _PIPELINE_CACHE[cache_key]
+    pipe = _PIPELINE_CACHE.pop(cache_key, None)
+    if pipe is None:
+        while len(_PIPELINE_CACHE) >= _MAX_CACHED_PIPELINES:
+            _PIPELINE_CACHE.popitem(last=False)          # drop the least recently used session
+            gc.collect()
+        pipe = EndToEndPipeline(model_path=model_path, num_threads=eff_threads, threshold=threshold,
+                                gate1_scrub=gate1_scrub, heartbeat_enabled=heartbeat_enabled)
+        log_rss(f"new pipeline {Path(model_path).name} threads={eff_threads}")
+    pipe.threshold = float(threshold)
+    pipe.gate2.threshold = float(threshold)
+    pipe.gate1.scrub = bool(gate1_scrub)
+    pipe.heartbeat_enabled = bool(heartbeat_enabled)
+    _PIPELINE_CACHE[cache_key] = pipe                    # most recently used goes last
+    return pipe
 
 
 def find_ground_truth_mask(patch_name: str) -> Optional[np.ndarray]:
@@ -197,7 +232,8 @@ def format_hex_dump(packet_bytes: bytes, bytes_per_line: int = 16) -> str:
     return "\n".join(lines)
 
 
-def format_packet_dissector_md(packet_bytes: bytes, packet_json: Optional[Dict[str, Any]]) -> str:
+def format_packet_dissector_md(packet_bytes: bytes, packet_json: Optional[Dict[str, Any]],
+                               model_label: str = "Pereira-3C") -> str:
     """Produces a structured byte-by-byte dissector table translating binary fields for the jury."""
     if not packet_bytes or not packet_json:
         return "*(No active fire detected on this tile — telemetry transmitter remains silent to conserve satellite battery power and link bandwidth)*"
@@ -208,17 +244,25 @@ def format_packet_dissector_md(packet_bytes: bytes, packet_json: Optional[Dict[s
     crc_valid = packet_json.get("crc_valid", True)
     flags = packet_json.get("flags", 0)
     flags_hex = packet_json.get("flags_hex", f"0x{flags:02X}")
+    _flag_names = {1: "INPUT_REJECTED", 2: "OUTPUT_REJECTED", 4: "TRANSIENTS_SCRUBBED", 8: "SATURATED_INPUT",
+                   16: "GATE2_WARN", 32: "HEARTBEAT", 64: "TIME_UNAVAILABLE", 128: "REFERENCE_ONLY"}
+    flags_txt = ", ".join(n for b, n in _flag_names.items() if int(flags) & b) or "Nominal"
+    ver = int(packet_json.get("version", 3))
+    mid = int(packet_json.get("model_id", 0))
+    fid = int(packet_json.get("frame_id", 0))
+    ts = int(packet_json.get("timestamp_ms", 0))
+    ts_txt = f"{ts} ms since epoch" if ts else "0 (not provided: TIME_UNAVAILABLE)"
 
     md = f"""### {SVG_TERMINAL} Protocol Dissector (Byte-by-Byte Translation for Jury)
 | Byte Offset | Field Name | Hex Value | Decoded Meaning | Operational Purpose |
 | :---: | :--- | :---: | :--- | :--- |
-| `0x00` | **Magic Identifier** | `0xF1` | `IASTAM_ALERT` | Flags telemetry frame as critical fire alert |
-| `0x01` | **Protocol Version** | `0x03` | `Version 3` | Space packet format specification |
-| `0x02` | **Model ID** | `0x01` | `Pereira-3C INT8` | Identifies neural model architecture |
-| `0x03..06` | **Frame Sequence** | `0x00000000` | Frame #{packet_json.get('frame_id', 0)} | Telemetry push-broom sequence counter |
-| `0x07..0E` | **Timestamp (UTC)** | `0x00000000` | Satellite Epoch | Synchronized GNSS UTC timestamp |
+| `0x00` | **Magic Identifier** | `0xF1` | `IASTAM_PACKET` | Start-of-packet marker |
+| `0x01` | **Protocol Version** | `0x{ver:02X}` | `Version {ver}` | Packet format version |
+| `0x02` | **Model ID** | `0x{mid:02X}` | `{model_label}` | Identifies the neural model architecture |
+| `0x03..06` | **Frame Sequence** | `0x{fid:08X}` | Frame #{fid} | Frame counter |
+| `0x07..0E` | **Acquisition time** | `0x{ts:016X}` | {ts_txt} | Supplied by the caller; the demo files carry none |
 | `0x0F` | **Event Count** | `0x{n_ev:02X}` | **{n_ev} Event(s)** | Number of 27-byte fire records attached |
-| `0x10` | **Status Flags** | `{flags_hex}` | `Nominal` | Hardware & quality gate telemetry flags |
+| `0x10` | **Status Flags** | `{flags_hex}` | `{flags_txt}` | Hardware & quality gate telemetry flags |
 """
     for i, ev in enumerate(events, 1):
         lat = ev.get('lat', 0.0)
@@ -229,7 +273,7 @@ def format_packet_dissector_md(packet_bytes: bytes, packet_json: Optional[Dict[s
         x, y, w, h = ev.get('x', 0), ev.get('y', 0), ev.get('w', 0), ev.get('h', 0)
         off_start = 17 + (i - 1) * 27
         off_end = off_start + 26
-        md += f"| `0x{off_start:02X}..{off_end:02X}` | **Event #{i} Record (27 B)** | *Binary Record* | **Lat: {lat:+.4f}°, Lon: {lon:+.4f}°** | BBox: `[{x},{y},{w},{h}]` · Area: `{area} ha` · Conf: `{conf:.1f}%` · $\\Delta\\rho$: `+{contrast}` |\n"
+        md += f"| `0x{off_start:02X}..{off_end:02X}` | **Event #{i} Record (27 B)** | *Binary Record* | **Lat: {lat:+.4f}°, Lon: {lon:+.4f}°** | BBox: `[{x},{y},{w},{h}]` · Area: `{area} ha` · Conf: `{conf:.1f}%` · Δρ: `+{contrast}` |\n"
 
     crc_status = badge("VALIDATED (Integrity Confirmed)", "optimal") if crc_valid else badge("CHECKSUM ERROR", "alert")
     md += f"| `Trailer (4 B)` | **IEEE 802.3 CRC32** | `{crc}` | **{crc_status}** | Prevents corrupted downlink alerts |\n"
@@ -318,6 +362,14 @@ def run_inference(
     crs = patch_info["crs"]
     gsd_m = patch_info["gsd_m"]
 
+    # Memory guard for the shared cloud instance (512 MB): scene mode costs roughly 40 bytes per pixel at peak
+    # (raw bands, probability map, masks, rendered images, zlib copy). Override with MAX_SCENE_PIXELS if needed.
+    max_px = int(os.environ.get("MAX_SCENE_PIXELS", 1_048_576 if ON_RENDER else 0))
+    n_px = raw_3band.shape[1] * raw_3band.shape[2]
+    if max_px and n_px > max_px:
+        return (None,) * 8 + (f"[ERROR] Scene too large for the shared cloud instance: {raw_3band.shape[1]}x{raw_3band.shape[2]} px "
+                              f"(limit {max_px:,} px). Run the demo locally, or crop to about 1024x1024.",) + ("", "", "")
+
     # 2. Configure Pipeline
     threads = 1 if "1 Thread" in thread_mode else -1
     pipeline = get_pipeline(
@@ -388,15 +440,8 @@ def run_inference(
             else:
                 parity_info = None
         else:
-            # Under Render 512MB RAM constraint, return verified benchmark parity without loading second model
-            parity_info = {
-                "agree_pct": 99.842,
-                "agree_px": 65431,
-                "total_px": 65536,
-                "diff_px": 105,
-                "primary": "INT8",
-                "counterpart": "FP32 (Audited)"
-            }
+            # Low-RAM host: the counterpart model is not loaded, so no parity is shown (no stand-in numbers).
+            parity_info = None
 
     else:
         # Scene Mode: Tiler Execution
@@ -450,7 +495,7 @@ def run_inference(
             packet_bytes = last_packet
             packet_json = last_json
         raw_bytes = raw_3band.nbytes
-        packet_size = total_packet_bytes if total_packet_bytes > 0 else 21
+        packet_size = total_packet_bytes
         reduction_ratio = raw_bytes / packet_size if packet_size > 0 else float("inf")
         status = "SCENE_COMPLETE"
         parity_info = None
@@ -471,6 +516,11 @@ def run_inference(
         alert_vs_zlib_x = float("inf")
         zlib_savings_pct = 100.0
 
+    reduction_txt = "∞ (nothing transmitted)" if packet_size == 0 else f"{reduction_ratio:,.0f}×"
+    edge_adv_txt = "nothing to send" if packet_size == 0 else f"{alert_vs_zlib_x:,.0f}× smaller"
+    reduction_tail = ("while providing actionable event coordinates within seconds." if events
+                      else "because no fire was found: the tile is simply not transmitted.")
+
     # 3. Render Visuals
     false_color_img = make_false_color(raw_3band)
     heatmap_img = make_heatmap(prob_map) if prob_map is not None else None
@@ -487,28 +537,29 @@ def run_inference(
         ev_metrics = compute_event_recall(events, gt_mask)
         gt_img = make_gt_comparison(binary_mask, gt_mask)
 
-        prec_badge = badge("OPTIMAL", "optimal") if metrics['precision'] >= 0.90 else badge("MARGIN", "margin")
-        rec_badge = badge("OPTIMAL", "optimal") if metrics['recall'] >= 0.90 else badge("MARGIN", "margin")
-        f1_badge = badge("OPTIMAL", "optimal") if metrics['f1'] >= 0.85 else badge("MARGIN", "margin")
-        iou_badge = badge("OPTIMAL", "optimal") if metrics['iou'] >= 0.80 else badge("MARGIN", "margin")
+        # Badges use exactly the reference values shown in the table (V7.1 test-split averages, rounded down).
+        prec_badge = badge("AT/ABOVE REF", "optimal") if metrics['precision'] >= 0.950 else badge("BELOW REF", "margin")
+        rec_badge = badge("AT/ABOVE REF", "optimal") if metrics['recall'] >= 0.940 else badge("BELOW REF", "margin")
+        f1_badge = badge("AT/ABOVE REF", "optimal") if metrics['f1'] >= 0.945 else badge("BELOW REF", "margin")
+        iou_badge = badge("AT/ABOVE REF", "optimal") if metrics['iou'] >= 0.900 else badge("BELOW REF", "margin")
         ev_badge = badge("DETECTED", "optimal") if ev_metrics['event_recall'] == 1.0 else badge("PARTIAL", "margin")
 
-        metrics_summary_md = f"""### {SVG_TARGET} Real-Time Verification Metrics (vs Standard Voting Mask)
-| Metric | Measured Value | Standard Benchmark Target | Status |
+        metrics_summary_md = f"""### {SVG_TARGET} Verification Metrics (vs Pereira voting mask: SWIR-algorithm labels, not field ground truth)
+| Metric | This image | V7.1 test-split reference (4,781 patches, rounded) | Status |
 | :--- | :---: | :---: | :---: |
-| **Precision** | **{metrics['precision']:.4f}** | $\\ge 0.950$ | {prec_badge} |
-| **Recall** | **{metrics['recall']:.4f}** | $\\ge 0.940$ | {rec_badge} |
-| **F1-Score** | **{metrics['f1']:.4f}** | $\\ge 0.945$ | {f1_badge} |
-| **IoU (Jaccard)** | **{metrics['iou']:.4f}** | $\\ge 0.900$ | {iou_badge} |
-| **Event Recall** | **{ev_metrics['event_recall']*100:.1f}%** | 100.0% | {ev_badge} |
+| **Precision** | **{metrics['precision']:.4f}** | ≥ 0.950 | {prec_badge} |
+| **Recall** | **{metrics['recall']:.4f}** | ≥ 0.940 | {rec_badge} |
+| **F1-Score** | **{metrics['f1']:.4f}** | ≥ 0.945 | {f1_badge} |
+| **IoU (Jaccard)** | **{metrics['iou']:.4f}** | ≥ 0.900 | {iou_badge} |
+| **Event Recall** | **{ev_metrics['event_recall']*100:.1f}%** | every labelled cluster matched | {ev_badge} |
 
 - **True Positives**: {metrics['tp']:,} px &nbsp;|&nbsp; **False Positives**: {metrics['fp']:,} px &nbsp;|&nbsp; **False Negatives**: {metrics['fn']:,} px
 """
         if metrics['recall'] == 1.0 and metrics['precision'] < 0.90:
             metrics_summary_md += f"""
 > **Mission Note on Single-Image Metrics**:  
-> Recall is **100.0%** (all {metrics['tp']} ground-truth fire pixels detected, 0 missed fires!).  
-> The {metrics['fp']} peripheral pixels represent the high-temperature radiant halo and combustion boundary detected by the neural network around the flame front, which conservative 3-algorithm heuristic voting masks exclude. On the aggregate benchmark test dataset of 4,781 patches, model precision reaches **0.9575** and F1 is **0.9493**.
+> Recall is **100.0%** (all {metrics['tp']} labelled fire pixels detected, none missed).  
+> The {metrics['fp']} extra pixels are predicted fire outside the voting mask. They may be flame-front pixels the 3-algorithm vote missed, or false positives; one image cannot tell which, and the voting masks are SWIR-algorithm output, not field ground truth. On the V7.1 test split (4,781 patches): precision **0.9575**, F1 **0.9493**.
 """
     else:
         metrics_summary_md = f"""### {SVG_INFO} Operational Context
@@ -520,7 +571,7 @@ def run_inference(
     throughput_fps = 1000.0 / total_pipeline_ms if total_pipeline_ms > 0 else 0.0
 
     telemetry_md = f"""### {status_icon} Pipeline Execution Telemetry
-| Stage | Execution Time | Mission Budget |
+| Stage | Execution Time | Note |
 | :--- | :---: | :---: |
 """
     if is_standard_patch:
@@ -534,19 +585,24 @@ def run_inference(
         ]
         for label, key in stage_names:
             ms_val = timings.get(key, 0.0)
-            telemetry_md += f"| {label} | **{ms_val:.2f} ms** | Nominal |\n"
-        telemetry_md += f"| **Total Pipeline Latency** | **`{total_pipeline_ms:.2f} ms`** | **< 100.0 ms (OBC Real-Time Budget)** |\n"
+            telemetry_md += f"| {label} | **{ms_val:.2f} ms** | measured |\n"
+        telemetry_md += f"| **Total Pipeline Latency** | **`{total_pipeline_ms:.2f} ms`** | **100 ms self-set target (host CPU, not OBC)** |\n"
         telemetry_md += f"| **End-to-End Wall Time** | **`{wall_ms:.2f} ms`** | (Includes file I/O & rendering) |\n"
+        telemetry_md += f"| **Inference threads** | **{pipeline.engine.threads_label}** | {model_variant} |\n"
         if parity_info:
             par_badge = badge(f"{parity_info['agree_pct']:.2f}% PARITY", "optimal" if parity_info['agree_pct'] >= 99.0 else "margin")
             telemetry_md += f"| **INT8/FP32 Parity (F13)** | **`{parity_info['agree_pct']:.3f}%`** | {par_badge} ({parity_info['agree_px']:,}/{parity_info['total_px']:,} px match, {parity_info['diff_px']} diff) |\n"
     else:
         telemetry_md += f"| Total Scene Processing ({timings.get('tiles_processed', 1)} tiles) | **{total_pipeline_ms:.2f} ms** | Scene Mode |\n"
-        telemetry_md += f"| Mean Time per 256×256 Tile | **{timings.get('mean_per_tile_ms', 0.0):.2f} ms** | Nominal |\n"
+        telemetry_md += f"| Mean Time per 256×256 Tile | **{timings.get('mean_per_tile_ms', 0.0):.2f} ms** | measured |\n"
 
-    telemetry_md += f"\n**Throughput**: **`{throughput_fps:.1f} FPS`** &nbsp;|&nbsp; **Real-Time Margin**: **`{max(0.0, (100.0 - total_pipeline_ms)/100.0 * 100):.1f}%`**\n"
+    telemetry_md += f"\n**Throughput**: **`{throughput_fps:.1f} FPS`** &nbsp;|&nbsp; **Margin vs 100 ms target**: **`{max(0.0, (100.0 - total_pipeline_ms)/100.0 * 100):.1f}%`**\n"
     if parity_info:
-        telemetry_md += f"\n> **Precision Parity (F13)**: INT8 vs FP32 agreement on current frame is **`{parity_info['agree_pct']:.3f}%`** ({parity_info['diff_px']} diverging px / {parity_info['total_px']:,}), verifying lossless 3.68× model quantization.\n"
+        telemetry_md += f"\n> **Precision Parity (F13)**: INT8 vs FP32 agreement on current frame is **`{parity_info['agree_pct']:.3f}%`** ({parity_info['diff_px']} diverging px / {parity_info['total_px']:,}). The INT8 file is about 3.7× smaller than FP32 (514.8 KiB vs 1.89 MiB); agreement below 100% means quantization is not lossless.\n"
+
+    if ON_RENDER:
+        telemetry_md += ("\n> **Shared cloud instance (Render free tier, 0.1 vCPU)**: these timings are not representative "
+                         "of the V7.1 host benchmark or of flight hardware. Run the demo locally for latency.\n")
 
     # 6. Data Reduction Panel Markdown (F12)
     reduction_md = f"""### {SVG_PACKAGE} Bandwidth & Downlink Reduction
@@ -555,22 +611,24 @@ def run_inference(
 | **Raw Input Size** | **{raw_bytes:,} Bytes** ({raw_bytes/1024:.1f} KiB) | 3 bands × 256² × 16-bit uint16 (raw multi-spectral frame) |
 | **Lossless zlib Compression** | **{zlib_bytes:,} Bytes** ({zlib_bytes/1024:.1f} KiB) | Lossless baseline (`{zlib_ratio:.2f}×` ratio · `{zlib_ms:.2f} ms`) |
 | **Binary Alert Packet** | **{packet_size} Bytes** | Compact Binary Alert Packet (Header + Events + CRC32) |
-| **Bandwidth Reduction (vs Raw)** | **`{reduction_ratio:,.0f}×`** | **Total space-to-ground downlink data saved** |
-| **Edge Advantage (vs zlib)** | **`{alert_vs_zlib_x:,.0f}× smaller`** | **`{zlib_savings_pct:.1f}%` saved over lossless image compression** |
+| **Bandwidth Reduction (vs Raw)** | **`{reduction_txt}`** | **Total space-to-ground downlink data saved** |
+| **Edge Advantage (vs zlib)** | **`{edge_adv_txt}`** | **`{zlib_savings_pct:.1f}%` saved over lossless image compression** |
 | **Events Detected** | **{len(events)}** | {'Transmitted top 6 in alert' if len(events)>6 else 'All clusters encoded'} |
 
 > **Information Extraction vs Blind Compression**:  
-> Lossless image compression (`zlib`) preserves raw sensor noise and only achieves **{zlib_ratio:.2f}×** reduction ({zlib_bytes/1024:.1f} KiB), which still saturates low-bandwidth direct-to-ground satellite links. IASTAM semantic edge intelligence extracts structured tactical fire alerts (**{packet_size} Bytes**), reducing downlink requirements by **{reduction_ratio:,.0f}×** while providing actionable event coordinates within seconds.
+> Lossless image compression (`zlib`) preserves raw sensor noise and only achieves **{zlib_ratio:.2f}×** reduction ({zlib_bytes/1024:.1f} KiB), which still saturates low-bandwidth direct-to-ground satellite links. IASTAM semantic edge intelligence extracts structured tactical fire alerts (**{packet_size} Bytes**), reducing downlink requirements by **{reduction_txt}** {reduction_tail}
 """
 
     # 7. Packet JSON, Hex Dump & Dissector
     packet_json_str = json.dumps(packet_json, indent=2) if packet_json else "{\n  \"status\": \"NO_FIRE_SILENCE\",\n  \"bytes_transmitted\": 0\n}"
     hex_dump_str = format_hex_dump(packet_bytes)
     cli_decoded_str = execute_cli_decoder(hex_dump_str)
-    dissector_md = format_packet_dissector_md(packet_bytes, packet_json)
+    dissector_md = format_packet_dissector_md(packet_bytes, packet_json,
+                                               "Pereira-3C · INT8 build" if "INT8" in model_variant else "Pereira-3C · FP32 build")
 
     # Clean up transient arrays and release memory back to OS
     gc.collect()
+    log_rss(f"after inference ({patch_name})")
 
     return (
         false_color_img,
@@ -627,21 +685,27 @@ def run_benchmark_30(model_variant: str, thread_mode: str, enable_scrub: bool):
     max_t = float(np.max(latencies))
     fps = 1000.0 / p50
 
-    status_pass = badge("PASSED (35% Margin)", "optimal") if p95 < 100.0 else badge("EXCEEDS MARGIN", "alert")
-    bench_md = f"""### {SVG_GAUGE} Live 30-Run Hardware Benchmark Results
-**Configuration**: `{model_variant}` · `{thread_mode}` · `Gate1 Scrub: {enable_scrub}`
+    margin_pct = (100.0 - p95) / 100.0 * 100.0
+    status_pass = (badge(f"WITHIN 100 ms TARGET ({margin_pct:.0f}% margin at p95)", "optimal") if p95 < 100.0
+                   else badge("ABOVE 100 ms TARGET", "alert"))
+    bench_md = f"""### {SVG_GAUGE} Live 30-Run Host-CPU Benchmark Results
+**Configuration**: `{model_variant}` · `{thread_mode}` → `{pipeline.engine.threads_label}` · `Gate1 Scrub: {enable_scrub}`
 
-| Metric | Measured Value | Standard Reference (Kaggle x86 Host) |
+| Metric | Measured on this machine | V7.1 reference (Kaggle x86 host) |
 | :--- | :---: | :---: |
 | **Median Latency (p50)** | **`{p50:.2f} ms`** | 64.38 ms |
 | **95th Percentile (p95)** | **`{p95:.2f} ms`** | 77.68 ms |
 | **Minimum Latency** | **`{min_t:.2f} ms`** | 58.42 ms (Inference floor) |
 | **Maximum Latency** | **`{max_t:.2f} ms`** | 85.10 ms |
 | **Sustained Throughput** | **`{fps:.1f} FPS`** | 15.2 FPS |
-| **Real-Time 100 ms Constraint** | {status_pass} | **100.0 ms Flight Budget** |
+| **100 ms self-set target** | {status_pass} | **100 ms (self-set, host CPU)** |
 
 *Stage Breakdown (p50)*: Gate 1: `{np.median(stage_times['gate1']):.2f} ms` · Preprocess: `{np.median(stage_times['preprocess']):.2f} ms` · Inference: `{np.median(stage_times['infer']):.2f} ms` · Event CCL: `{np.median(stage_times['event']):.2f} ms`
 """
+    if ON_RENDER:
+        bench_md += ("\n> **Shared cloud instance (Render free tier, 0.1 vCPU)**: latency here is not representative. "
+                     "Run the demo locally for the benchmark.\n")
+    log_rss("after benchmark")
     return bench_md
 
 
@@ -1394,7 +1458,15 @@ HEAD_HTML = f"""
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600;700;800;900&family=Rajdhani:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 """
 
-with gr.Blocks(title="IASTAM 6.0 | Team Spacetoon : Edge Fire Detection") as demo:
+_blocks_kwargs = {"title": "IASTAM 6.0 | Team Spacetoon : Edge Fire Detection"}
+try:
+    import inspect
+    if "delete_cache" in inspect.signature(gr.Blocks.__init__).parameters:
+        _blocks_kwargs["delete_cache"] = (900, 900)       # purge cached output images older than 15 min, every 15 min
+except Exception:
+    pass
+
+with gr.Blocks(**_blocks_kwargs) as demo:
     gr.HTML(MISSION_HEADER_HTML)
 
     with gr.Row():
@@ -1503,6 +1575,7 @@ with gr.Blocks(title="IASTAM 6.0 | Team Spacetoon : Edge Fire Detection") as dem
 
     run_btn.click(
         fn=run_inference,
+        concurrency_id="pipeline",
         inputs=[
             upload_file,
             sample_dropdown,
@@ -1516,6 +1589,7 @@ with gr.Blocks(title="IASTAM 6.0 | Team Spacetoon : Edge Fire Detection") as dem
 
     sample_dropdown.change(
         fn=run_inference,
+        concurrency_id="pipeline",
         inputs=[
             upload_file,
             sample_dropdown,
@@ -1529,9 +1603,16 @@ with gr.Blocks(title="IASTAM 6.0 | Team Spacetoon : Edge Fire Detection") as dem
 
     bench_btn.click(
         fn=run_benchmark_30,
+        concurrency_id="pipeline",
         inputs=[model_selector, thread_selector, scrub_checkbox],
         outputs=[bench_output]
     )
+
+
+try:
+    demo.queue(default_concurrency_limit=1, max_size=6)  # run/benchmark share one slot ("pipeline"); extra visitors wait
+except TypeError:
+    demo.queue()
 
 
 if __name__ == "__main__":
@@ -1542,6 +1623,12 @@ if __name__ == "__main__":
         pass
     host = "0.0.0.0" if os.environ.get("RENDER") or os.environ.get("PORT") or os.environ.get("DOCKER") else "127.0.0.1"
     print(f"[IASTAM DEMO] Launching IASTAM Edge Demo on http://{host}:{port} ...")
+    try:
+        log_rss("startup (before warm-up)")
+        get_pipeline("INT8 (514 KiB)", num_threads=1)    # matches the UI defaults, so the first request is not a cold start
+        log_rss("startup (default INT8 pipeline warmed)")
+    except Exception as exc:
+        print(f"[IASTAM DEMO] warm-up skipped: {exc}", flush=True)
     demo.launch(
         server_name=host,
         server_port=port,

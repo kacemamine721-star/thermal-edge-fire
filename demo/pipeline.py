@@ -28,6 +28,7 @@ import numpy as np
 import onnxruntime as ort
 from scipy import ndimage
 from scipy.ndimage import median_filter
+from scipy.special import expit
 
 # ───────────────── Manifest Constants Loading (TRD §1.6) ─────────────────
 def load_manifest(manifest_path: Optional[Path | str] = None) -> Dict[str, Any]:
@@ -142,7 +143,9 @@ class Gate1:
             return self._reject(dn, f'Valid pixel area {valid_frac:.1%} < {self.min_valid_frac:.0%}')
 
         col_std = dn.std(axis=1)  # (C, W)
-        dead_cols = (col_std < 1.0).sum(axis=1)
+        # Columns that are zero in every band are no-data / zero-padding (scene-tiler edges), not dead detector columns.
+        data_cols = (dn > 0).any(axis=(0, 1))                       # (W,)
+        dead_cols = ((col_std < 1.0) & data_cols[None, :]).sum(axis=1)
         dead_frac = float(dead_cols.max() / FRAME_SIZE)
         if dead_frac > self.max_dead_col_frac:
             return self._reject(dn, f'Dead columns {dead_frac:.1%} exceed limit {self.max_dead_col_frac:.0%}')
@@ -207,9 +210,13 @@ class InferenceEngine:
         # In cloud containers (Render 512MB RAM / CFS quota), force 1 thread to avoid thread contention
         if num_threads <= 0 and (os.environ.get("RENDER") or os.environ.get("RENDER_INSTANCE_ID")):
             num_threads = 1
-        eff_threads = max(1, int(num_threads)) if num_threads > 0 else 1
-        so.intra_op_num_threads = eff_threads
-        so.inter_op_num_threads = eff_threads
+        # num_threads <= 0 means "all cores": ONNX Runtime's value 0 = use every available core.
+        # (Before, <= 0 was silently turned into 1 thread, so the two UI modes ran identically.)
+        intra = int(num_threads) if num_threads > 0 else 0
+        so.intra_op_num_threads = intra
+        so.inter_op_num_threads = 1
+        self.threads_requested = intra
+        self.threads_label = f"{intra} thread" + ("s" if intra != 1 else "") if intra > 0 else f"all cores ({os.cpu_count() or 1} logical)"
         # Prevent ONNX Runtime from pre-allocating a huge memory arena (saves ~80-120MB RAM)
         so.enable_cpu_mem_arena = False
         self.session = ort.InferenceSession(str(model_path), so, providers=['CPUExecutionProvider'])
@@ -228,7 +235,7 @@ class InferenceEngine:
 def calibrate_probabilities(logits: np.ndarray, temperature: float = TEMPERATURE_DEFAULT) -> np.ndarray:
     """Temperature-scaled sigmoid probability calibration."""
     scaled = logits / float(temperature)
-    return 1.0 / (1.0 + np.exp(-scaled))
+    return expit(scaled)          # numerically stable, no overflow warnings on very negative logits
 
 
 # ───────────────── Stage 5: Event Extraction ─────────────────
@@ -274,9 +281,15 @@ def extract_events(prob: np.ndarray, dn: np.ndarray, threshold: float = THRESHOL
         centroid_y = ymin + float(ys.mean())
         centroid_x = xmin + float(xs.mean())
 
-        # Geolocation via affine transform and cached CRS reprojection
-        if geo_transform is not None:
-            proj_x, proj_y = geo_transform * (centroid_x, centroid_y)
+        # Geolocation via affine transform and cached CRS reprojection.
+        # Valid only with a real CRS and a non-identity transform: rasterio returns an identity transform for files
+        # without georeferencing, which used to yield pixel coordinates reported as latitude/longitude.
+        geo_ok = (geo_transform is not None and crs is not None
+                  and not getattr(geo_transform, 'is_identity', False)
+                  and (getattr(crs, 'is_geographic', False) or transformer is not None))
+        if geo_ok:
+            # +0.5: centroid is in pixel-index units; the affine transform maps pixel CORNERS
+            proj_x, proj_y = geo_transform * (centroid_x + 0.5, centroid_y + 0.5)
             if transformer is not None:
                 lon, lat = transformer.transform(proj_x, proj_y)
             else:
@@ -434,7 +447,14 @@ class EndToEndPipeline:
     def __init__(self, model_path: str, num_threads: int = 1,
                  threshold: float = THRESHOLD_DEFAULT,
                  temperature: float = TEMPERATURE_DEFAULT,
-                 gate1_scrub: bool = False):
+                 gate1_scrub: bool = False,
+                 heartbeat_enabled: bool = True,
+                 heartbeat_every_n_frames: int = HEARTBEAT_EVERY_N_FRAMES):
+        # heartbeat_enabled=True reproduces the onboard behaviour (21 B link-health packet on the first frame and every
+        # N-th frame). The demo creates single-frame pipelines with heartbeat_enabled=False so a fire-free tile
+        # shows what matters: nothing is transmitted.
+        self.heartbeat_enabled = bool(heartbeat_enabled)
+        self.heartbeat_every_n_frames = int(heartbeat_every_n_frames)
         self.engine = InferenceEngine(model_path, num_threads=num_threads)
         self.gate1 = Gate1(scrub=gate1_scrub)
         self.gate2 = Gate2(threshold=threshold)
@@ -514,8 +534,11 @@ class EndToEndPipeline:
             pkt = encode_packet(frame_id, MODEL_ID, timestamp_ms, events, flags=flags)
             status = 'ALERT'
         else:
-            # Heartbeat every 30 frames or 1st frame
-            if self.frames_processed == 1 or (self.frames_processed % 30 == 0):
+            # Heartbeat on the 1st frame and every N-th frame (onboard link-health behaviour, optional in the demo)
+            heartbeat_due = self.heartbeat_enabled and (
+                self.frames_processed == 1 or
+                (self.heartbeat_every_n_frames > 0 and self.frames_processed % self.heartbeat_every_n_frames == 0))
+            if heartbeat_due:
                 pkt = encode_packet(frame_id, MODEL_ID, timestamp_ms, [], flags=flags | FLAG_HEARTBEAT)
                 status = 'HEARTBEAT_NO_FIRE'
             else:

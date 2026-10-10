@@ -52,6 +52,30 @@ def get_wgs84_transformer(crs_str: str) -> Optional[pyproj.Transformer]:
         return None
 
 
+def to_uint16_dn(arr: np.ndarray) -> np.ndarray:
+    """Validates that an array looks like Landsat Level-1 DN and returns it as uint16.
+    Raises ValueError with an actionable message instead of silently producing garbage."""
+    if np.issubdtype(arr.dtype, np.floating):
+        finite = np.isfinite(arr)
+        if finite.any() and float(np.nanmax(arr[finite])) <= 2.0:
+            raise ValueError("values look like reflectance (0-1); export the raw Level-1 DN "
+                             "(e.g. LANDSAT/LC08/C02/T1), not a TOA/surface-reflectance product")
+        out = np.clip(np.nan_to_num(arr, nan=0.0), 0, 65535).astype(np.uint16)
+    elif arr.dtype == np.uint8:
+        raise ValueError("8-bit imagery is not Landsat Level-1 DN (expected 16-bit values)")
+    elif arr.dtype == np.uint16:
+        out = arr
+    else:
+        if arr.size and int(arr.max()) > 65535:
+            raise ValueError(f"values up to {int(arr.max())} exceed the 16-bit Landsat DN range")
+        out = np.clip(arr, 0, 65535).astype(np.uint16)
+    valid = out[out > 0]
+    if valid.size and float(np.median(valid)) < 2000:
+        raise ValueError(f"median DN {float(np.median(valid)):.0f} is far too low for Landsat L1 DN "
+                         "(are these reflectance values or an 8-bit stretch?)")
+    return out
+
+
 def load_patch(file_path: str | Path) -> Dict[str, Any]:
     """Loads a satellite patch/scene GeoTIFF, extracting [C7, C6, C2] as uint16."""
     file_path = str(file_path)
@@ -61,37 +85,31 @@ def load_patch(file_path: str | Path) -> Dict[str, Any]:
         crs = src.crs
         h, w = src.height, src.width
 
-        # Approximate GSD in meters
-        if transform is not None:
-            gsd_m = int(round(abs(transform[0])))
-            if gsd_m <= 0 or gsd_m > 1000:
-                gsd_m = 30
-        else:
+        # rasterio returns an IDENTITY transform (not None) for files without georeferencing; treat that as "no geo"
+        georeferenced = (crs is not None and transform is not None
+                         and not getattr(transform, 'is_identity', False))
+        gsd_m = int(round(abs(transform[0]))) if georeferenced else 30
+        if gsd_m <= 0 or gsd_m > 1000:       # e.g. geographic CRS in degrees
             gsd_m = 30
+        if not georeferenced:
+            transform, crs = None, None
 
         if count >= 10:
             # Pereira dataset: Band 7=SWIR2, Band 6=SWIR1, Band 2=Blue
             raw_3band = src.read([7, 6, 2])
-        elif count >= 3:
-            raw_3band = src.read([1, 2, 3])
-        elif count == 1:
-            band1 = src.read(1)
-            raw_3band = np.stack([band1, band1, band1], axis=0)
+        elif count == 3:
+            raw_3band = src.read([1, 2, 3])          # contract: band order [B7, B6, B2] = [C7, C6, C2]
         else:
-            raise ValueError(f"Unsupported band count: {count}")
+            raise ValueError(f"Unsupported band count: {count}. Provide a 10-band Pereira patch, or a 3-band "
+                             "GeoTIFF in the order [B7, B6, B2] (raw Level-1 DN).")
 
-        if raw_3band.dtype != np.uint16:
-            if np.issubdtype(raw_3band.dtype, np.floating):
-                raw_3band = np.clip(raw_3band, 0, 65535).astype(np.uint16)
-            elif raw_3band.dtype == np.uint8:
-                raw_3band = raw_3band.astype(np.uint16)
-            else:
-                raw_3band = np.clip(raw_3band, 0, 65535).astype(np.uint16)
+        raw_3band = to_uint16_dn(raw_3band)
 
         return {
             'raw_3band': raw_3band,
             'transform': transform,
             'crs': crs,
+            'georeferenced': georeferenced,
             'gsd_m': gsd_m,
             'bounds': src.bounds,
             'count': count,
@@ -106,7 +124,7 @@ def pixel_to_wgs84(x: float, y: float, transform: Any, crs: Any) -> Tuple[float,
         return 0.0, 0.0
 
     # Apply affine transform to get projected coordinates
-    proj_x, proj_y = transform * (x, y)
+    proj_x, proj_y = transform * (x + 0.5, y + 0.5)     # pixel centre
 
     if crs is None:
         return 0.0, 0.0
