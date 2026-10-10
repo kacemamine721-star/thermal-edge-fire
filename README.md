@@ -154,7 +154,7 @@ Total: 64 Bytes
 A standalone visual demo allows operators and jury members to test real Landsat-8 GeoTIFF patches, custom user imagery, and simulated orbital thermal scenes:
 
 <p align="center">
-  <img src="demo/img/iastam_banner.jpg" alt="IASTAM Demo Interface" width="100%" />
+  <img src="img/demo_interface.png" alt="IASTAM Demo Interface" width="100%" />
 </p>
 
 ### Key Features Implemented:
