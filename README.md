@@ -57,11 +57,6 @@ simulated-raw dataset, followed by target-hardware measurements.
 | B10-only thermal model | Evaluated Landsat thermal control; not a flight microbolometer validation |
 | ONNX FP32/INT8 export | Implemented and verified on the host |
 | Raspberry Pi CM4 / flight-computer benchmark | Prepared, but not physically measured here |
-| Flight sensor, orbit, power, and end-to-end space validation | Not yet implemented |
-
-This distinction is central to the project narrative: the contribution is the
-processing chain that turns imagery into a compact decision product, while the
-flight sensor choice remains a hardware and data-validation decision.
 
 ---
 
@@ -78,7 +73,7 @@ image frame → quality checks → segmentation → fire events → compact aler
 ```
 
 The project extends the segmentation work of the Pereira ActiveFire benchmark
-and the onboard prioritization pattern of Chatar et al. with:
+and the onboard prioritization pattern of [Chatar et al.](https://www.mdpi.com/2072-4292/16/10/1729#app1-remotesensing-16-01729) with:
 
 - input-quality screening and transient scrubbing;
 - a lightweight U-Net edge model with FP32 and INT8 deployment paths;
@@ -87,9 +82,8 @@ and the onboard prioritization pattern of Chatar et al. with:
 - persistent priority buffering and retry across missed contacts; and
 - explicit evaluation of accuracy, data reduction, latency, and robustness.
 
-The distinctive goal is therefore **transmitting information rather than raw
-data**, not claiming that a particular uncooled LWIR sensor has already been
-validated in orbit.
+So the distinctive goal is **transmitting information rather than raw
+data**.
 
 ---
 
@@ -132,10 +126,6 @@ payload-dependent extension.
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
-Gate 1 and Gate 2 are safeguards around the information product. They are not
-a claim that the current model has been tested on a flight microbolometer or
-that the complete system has been operated in orbit.
-
 The architecture dossier is available at
 [`docs/MODEL_ARCHITECTURE.md`](docs/MODEL_ARCHITECTURE.md).
 
@@ -143,7 +133,7 @@ The architecture dossier is available at
 
 ## <i class="fa-solid fa-microchip" style="color:#10b981; font-size:1.05em; vertical-align:-1px; margin-right:8px;"></i> What the experiments established
 
-### Band selection is an empirical result, not an assumption
+### Band selection from paper and empirical result.
 
 The band-information probe found that the Pereira voting masks are much more
 closely aligned with the reflectance/SWIR inputs than with B10 thermal input:
@@ -155,22 +145,19 @@ closely aligned with the reflectance/SWIR inputs than with B10 thermal input:
 | C6 / SWIR1 | Supporting spectral contrast | **0.820** |
 | C2 / Blue | Supporting context | **0.565** |
 
-This explains the selection of Pereira-3C as the primary configuration. Its
-score is a validated multispectral information-extraction result, not an LWIR
-result.
+This explains the selection of [Pereira-3C](https://www.sciencedirect.com/science/article/abs/pii/S092427162100160X) as the primary configuration. He explained it in detail in his article if you are curious.
 
 <p align="center">
   <img src="reports/figures/activefire_correlation_matrix.png" alt="Landsat-8 cross-band Pearson correlation matrix" width="100%" />
 </p>
 
-*Cross-band correlation provides sensor context; the AUC values above—not
-correlation alone—are the basis for the input-band selection.*
+*Cross-band correlation provides sensor context; the AUC values above are the basis for the input-band selection.*
 
 ### Model results
 
 The following values come from the final training and evaluation workflow in
 [`notebooks/03_SPACETOON_IASTAM_MODEL_PROTOTYPE_PHASE3.ipynb`](notebooks/03_SPACETOON_IASTAM_MODEL_PROTOTYPE_PHASE3.ipynb)
-and are reported against the Pereira voting-mask reference. They are not
+and are reported against the Pereira voting-mask reference. Actually, they are not
 field-ground truth for a flight sensor.
 
 | Configuration | Input | Precision | Recall | IoU | F1 | Event recall |
@@ -184,7 +171,7 @@ field-ground truth for a flight sensor.
 </p>
 
 *The thermal-background distributions illustrate why B10-only interpretation
-must account for regional background conditions. This figure is contextual; the
+must account for regional background conditions. It helpes us predict and understand why B10-only model didn't work well. This figure is contextual, the
 configuration table above reports the segmentation results.*
 
 An independent manual-label zero-shot test reports **F1 = 0.8493** and recall
