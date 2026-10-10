@@ -275,8 +275,8 @@ thermal-edge-fire/
 * **Technical Supervision:** Space & Earth Observation AI Challenge (IASTAM 2026)
 * **Defense Date:** October 15, 2026
 * **Reference Foundations:** 
-  - Chatar et al. (2024), *Edge computing for wildfire detection on CubeSats*.
-  - Pereira et al. (2021), *ActiveFire Landsat-8 benchmark dataset*.
+  - K. Chatar, K. Kitamura, and M. Cho, "Onboard Data Prioritization Using Multi-Class Image Segmentation for Nanosatellites," Remote Sens., vol. 16, no. 10, p. 1729, May 2024. doi: 10.3390/rs16101729.
+  - G. H. de Almeida Pereira, A. M. Fusioka, B. T. Nassu, and R. Minetto, "Active fire detection in Landsat-8 imagery: A large-scale dataset and a deep-learning study," ISPRS J. Photogramm. Remote Sens., vol. 178, pp. 171–186, 2021, doi: 10.1016/j.isprsjprs.2021.06.002.
   - M. H. bin Azami, N. C. Orger, V. H. Schulz, T. Oshiro, and M. Cho, "Earth Observation Mission of a 6U CubeSat with a 5-Meter Resolution for Wildfire Image Classification Using Convolution Neural Network Approach," Remote Sensing, vol. 14, no. 8, p. 1874, Apr. 2022. DOI: 10.3390/rs14081874
 
 ---
