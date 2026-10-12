@@ -1425,7 +1425,6 @@ MISSION_HEADER_HTML = f"""
                 <div class="pill-row">
                     <span class="pill-badge pill-ieee">IEEE IASTAM 6.0</span>
                     <span class="pill-badge pill-team">TEAM SPACETOON</span>
-                    <span class="pill-badge pill-flight"><span class="beacon-dot"></span> FLIGHT MODEL ACTIVE</span>
                 </div>
                 <h1 class="mission-title">Edge-Native Spaceborne Wildfire Detection</h1>
                 <p class="mission-subtitle">Autonomous 6U CubeSat On-Board Neural Inference · False-Alarm Rejection · Sub-Kilobyte Binary Alert Telemetry</p>
