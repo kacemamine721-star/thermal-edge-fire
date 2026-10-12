@@ -17,6 +17,7 @@ import base64
 import gc
 import json
 import os
+import subprocess
 import time
 import sys
 import zlib
@@ -234,7 +235,6 @@ def format_hex_dump(packet_bytes: bytes, bytes_per_line: int = 16) -> str:
 
 def format_packet_dissector_md(packet_bytes: bytes, packet_json: Optional[Dict[str, Any]],
                                model_label: str = "Pereira-3C") -> str:
-    """Produces a structured byte-by-byte dissector table translating binary fields for the jury."""
     if not packet_bytes or not packet_json:
         return "*(No active fire detected on this tile — telemetry transmitter remains silent to conserve satellite battery power and link bandwidth)*"
 
@@ -351,6 +351,24 @@ def run_inference(
     if not Path(file_path).exists():
         return (None,) * 8 + (f"[ERROR] File not found: {file_path}",) + ("", "", "")
 
+    # The interactive dashboard builds several full-resolution visual products.
+    # Direct a complete Landsat scene to the bounded-memory verifier before the
+    # upload callback can exhaust the Gradio process.
+    ui_scene_limit = int(os.environ.get("MAX_UI_SCENE_PIXELS", 1_048_576 if ON_RENDER else 4_194_304))
+    try:
+        with rasterio.open(file_path) as src:
+            source_pixels = src.width * src.height
+            source_shape = f"{src.width}x{src.height}"
+    except Exception as e:
+        return (None,) * 8 + (f"[ERROR] Cannot inspect GeoTIFF: {str(e)}",) + ("", "", "")
+    if source_pixels > ui_scene_limit:
+        return (None,) * 8 + (
+            f"[ERROR] {source_shape} is a full scene ({source_pixels:,} px), which is too large for the interactive "
+            "dashboard's full-resolution visual buffers. Run the bounded-memory local verifier instead: "
+            f"`python demo/run_full_scene.py \"{file_path}\"`. It processes every 256×256 tile and writes the "
+            "actual alert packets plus `scene_manifest.json`.",
+        ) + ("", "", "")
+
     # 1. Load GeoTIFF
     try:
         patch_info = load_patch(file_path)
@@ -454,6 +472,13 @@ def run_inference(
         total_packet_bytes = 0
         last_packet = b""
         last_json = None
+        stage_keys = (
+            "gate1_ms", "preprocess_ms", "infer_ms", "calibration_ms",
+            "event_extract_ms", "gate2_ms", "encode_ms",
+        )
+        stage_totals = {key: 0.0 for key in stage_keys}
+        stage_samples = {key: 0 for key in stage_keys}
+        tile_statuses = []
 
         for t in tiler.iterate_tiles():
             t_res = pipeline.process_frame(
@@ -463,6 +488,14 @@ def run_inference(
                 crs=crs,
                 gsd_m=gsd_m
             )
+            tile_statuses.append(t_res["status"])
+            for key in stage_keys:
+                # A rejected tile never reaches later stages. Track that explicitly
+                # instead of presenting an invented zero-duration measurement.
+                if key in t_res["timings"]:
+                    stage_totals[key] += t_res["timings"][key]
+                    stage_samples[key] += 1
+
             if t_res["binary_mask"] is not None:
                 vh, vw = t["valid_h"], t["valid_w"]
                 scene_prob[t["offset_y"] : t["offset_y"] + vh, t["offset_x"] : t["offset_x"] + vw] = t_res["prob_map"][:vh, :vw]
@@ -479,12 +512,19 @@ def run_inference(
                 last_packet = t_res["packet"]
                 last_json = t_res["packet_json"]
 
-        total_pipeline_ms = (time.perf_counter() - t_start) * 1000.0
+        scene_wall_ms = (time.perf_counter() - t_start) * 1000.0
+        tile_pipeline_ms = sum(stage_totals.values())
         timings = {
-            "total_ms": total_pipeline_ms,
-            "mean_per_tile_ms": total_pipeline_ms / tiler.total_tiles,
-            "tiles_processed": tiler.total_tiles
+            "total_ms": scene_wall_ms,
+            "mean_per_tile_ms": tile_pipeline_ms / tiler.total_tiles,
+            "tile_pipeline_ms": tile_pipeline_ms,
+            "tiles_processed": tiler.total_tiles,
+            "stage_totals": stage_totals,
+            "stage_samples": stage_samples,
+            "gate1_rejected_tiles": tile_statuses.count("GATE1_REJECT"),
+            "gate2_rejected_tiles": tile_statuses.count("GATE2_REJECT"),
         }
+        total_pipeline_ms = scene_wall_ms
         events = all_events
         binary_mask = scene_mask
         prob_map = scene_prob
@@ -497,7 +537,14 @@ def run_inference(
         raw_bytes = raw_3band.nbytes
         packet_size = total_packet_bytes
         reduction_ratio = raw_bytes / packet_size if packet_size > 0 else float("inf")
-        status = "SCENE_COMPLETE"
+        if all_events:
+            status = "ALERT"
+        elif timings["gate1_rejected_tiles"] == tiler.total_tiles:
+            status = "GATE1_REJECT"
+        elif timings["gate2_rejected_tiles"] == tiler.total_tiles:
+            status = "GATE2_REJECT"
+        else:
+            status = "NO_FIRE_SILENCE"
         parity_info = None
 
     # Wall Clock Time
@@ -519,7 +566,9 @@ def run_inference(
     reduction_txt = "∞ (nothing transmitted)" if packet_size == 0 else f"{reduction_ratio:,.0f}×"
     edge_adv_txt = "nothing to send" if packet_size == 0 else f"{alert_vs_zlib_x:,.0f}× smaller"
     reduction_tail = ("while providing actionable event coordinates within seconds." if events
-                      else "because no fire was found: the tile is simply not transmitted.")
+                      else ("because no fire was found: the tile is simply not transmitted."
+                            if is_standard_patch else
+                            "because no fire was found: no event packet is emitted for the processed tiles."))
 
     # 3. Render Visuals
     false_color_img = make_false_color(raw_3band)
@@ -568,7 +617,12 @@ def run_inference(
 
     # 5. Build Telemetry & Latency Status Markdown
     status_icon = SVG_SHIELD_ALERT if status == "ALERT" else (SVG_ACTIVITY if status == "HEARTBEAT_NO_FIRE" else SVG_SHIELD_CHECK)
-    throughput_fps = 1000.0 / total_pipeline_ms if total_pipeline_ms > 0 else 0.0
+    if is_standard_patch:
+        throughput_fps = 1000.0 / total_pipeline_ms if total_pipeline_ms > 0 else 0.0
+        target_ms = total_pipeline_ms
+    else:
+        throughput_fps = (timings["tiles_processed"] * 1000.0 / total_pipeline_ms) if total_pipeline_ms > 0 else 0.0
+        target_ms = timings["mean_per_tile_ms"]
 
     telemetry_md = f"""### {status_icon} Pipeline Execution Telemetry
 | Stage | Execution Time | Note |
@@ -581,10 +635,11 @@ def run_inference(
             (f"Neural Inference ({'INT8' if 'INT8' in model_variant else 'FP32'})", "infer_ms"),
             ("Calibration & Thresholding", "calibration_ms"),
             ("Event Extraction & CCL", "event_extract_ms"),
-            ("Gate 2 & Packet Serialization", "encode_ms"),
+            ("Gate 2 & Packet Serialization", "gate2_ms", "encode_ms"),
         ]
-        for label, key in stage_names:
-            ms_val = timings.get(key, 0.0)
+        for stage in stage_names:
+            label, *keys = stage
+            ms_val = sum(timings.get(key, 0.0) for key in keys)
             telemetry_md += f"| {label} | **{ms_val:.2f} ms** | measured |\n"
         telemetry_md += f"| **Total Pipeline Latency** | **`{total_pipeline_ms:.2f} ms`** | **100 ms self-set target (host CPU, not OBC)** |\n"
         telemetry_md += f"| **End-to-End Wall Time** | **`{wall_ms:.2f} ms`** | (Includes file I/O & rendering) |\n"
@@ -593,10 +648,32 @@ def run_inference(
             par_badge = badge(f"{parity_info['agree_pct']:.2f}% PARITY", "optimal" if parity_info['agree_pct'] >= 99.0 else "margin")
             telemetry_md += f"| **INT8/FP32 Parity (F13)** | **`{parity_info['agree_pct']:.3f}%`** | {par_badge} ({parity_info['agree_px']:,}/{parity_info['total_px']:,} px match, {parity_info['diff_px']} diff) |\n"
     else:
-        telemetry_md += f"| Total Scene Processing ({timings.get('tiles_processed', 1)} tiles) | **{total_pipeline_ms:.2f} ms** | Scene Mode |\n"
-        telemetry_md += f"| Mean Time per 256×256 Tile | **{timings.get('mean_per_tile_ms', 0.0):.2f} ms** | measured |\n"
+        tile_count = timings["tiles_processed"]
+        stage_definitions = [
+            ("Gate 1 (Quality & Radiation)", ("gate1_ms",)),
+            ("Radiometric Preprocessing", ("preprocess_ms",)),
+            (f"Neural Inference ({'INT8' if 'INT8' in model_variant else 'FP32'})", ("infer_ms",)),
+            ("Calibration & Thresholding", ("calibration_ms",)),
+            ("Event Extraction & CCL", ("event_extract_ms",)),
+            ("Gate 2 & Packet Serialization", ("gate2_ms", "encode_ms")),
+        ]
+        for label, keys in stage_definitions:
+            stage_total = sum(timings["stage_totals"][key] for key in keys)
+            completed_tiles = min(timings["stage_samples"][key] for key in keys)
+            if completed_tiles:
+                note = f"{stage_total / completed_tiles:.2f} ms/tile ({completed_tiles}/{tile_count} reached stage)"
+            else:
+                note = f"not reached (0/{tile_count} tiles)"
+            telemetry_md += f"| {label} | **{stage_total:.2f} ms** | {note} |\n"
+        telemetry_md += f"| **Total Tile Pipeline Time** | **`{timings['tile_pipeline_ms']:.2f} ms`** | sum of measured stages across {tile_count} tiles |\n"
+        telemetry_md += f"| **Scene Wall Time** | **`{total_pipeline_ms:.2f} ms`** | includes tiling, aggregation & packet summary |\n"
+        telemetry_md += f"| **Inference threads** | **{pipeline.engine.threads_label}** | {model_variant} |\n"
+        if timings["gate1_rejected_tiles"] or timings["gate2_rejected_tiles"]:
+            telemetry_md += f"| **Rejected tiles** | **{timings['gate1_rejected_tiles'] + timings['gate2_rejected_tiles']}** | Gate 1: {timings['gate1_rejected_tiles']} · Gate 2: {timings['gate2_rejected_tiles']} |\n"
 
-    telemetry_md += f"\n**Throughput**: **`{throughput_fps:.1f} FPS`** &nbsp;|&nbsp; **Margin vs 100 ms target**: **`{max(0.0, (100.0 - total_pipeline_ms)/100.0 * 100):.1f}%`**\n"
+    throughput_label = "FPS" if is_standard_patch else "tiles/s"
+    margin_label = "Margin" if is_standard_patch else "Mean tile margin"
+    telemetry_md += f"\n**Throughput**: **`{throughput_fps:.1f} {throughput_label}`** &nbsp;|&nbsp; **{margin_label} vs 100 ms target**: **`{max(0.0, (100.0 - target_ms)/100.0 * 100):.1f}%`**\n"
     if parity_info:
         telemetry_md += f"\n> **Precision Parity (F13)**: INT8 vs FP32 agreement on current frame is **`{parity_info['agree_pct']:.3f}%`** ({parity_info['diff_px']} diverging px / {parity_info['total_px']:,}). The INT8 file is about 3.7× smaller than FP32 (514.8 KiB vs 1.89 MiB); agreement below 100% means quantization is not lossless.\n"
 
@@ -605,12 +682,17 @@ def run_inference(
                          "of the Model host benchmark or of flight hardware. Run the demo locally for latency.\n")
 
     # 6. Data Reduction Panel Markdown (F12)
+    image_scope = "frame" if is_standard_patch else "scene"
+    raw_shape = f"{raw_3band.shape[0]} bands × {raw_3band.shape[1]}×{raw_3band.shape[2]} × 16-bit uint16"
+    packet_label = "Binary Alert Packet" if is_standard_patch else "Tile Alert Packets (total)"
+    packet_meaning = ("Compact Binary Alert Packet (Header + Events + CRC32)" if is_standard_patch
+                      else f"Sum of packets emitted by {timings['tiles_processed']} independently processed tiles")
     reduction_md = f"""### {SVG_PACKAGE} Bandwidth & Downlink Reduction
 | Parameter | Value | Downlink Meaning |
 | :--- | :---: | :--- |
-| **Raw Input Size** | **{raw_bytes:,} Bytes** ({raw_bytes/1024:.1f} KiB) | 3 bands × 256² × 16-bit uint16 (raw multi-spectral frame) |
+| **Raw Input Size** | **{raw_bytes:,} Bytes** ({raw_bytes/1024:.1f} KiB) | {raw_shape} (raw multi-spectral {image_scope}) |
 | **Lossless zlib Compression** | **{zlib_bytes:,} Bytes** ({zlib_bytes/1024:.1f} KiB) | Lossless baseline (`{zlib_ratio:.2f}×` ratio · `{zlib_ms:.2f} ms`) |
-| **Binary Alert Packet** | **{packet_size} Bytes** | Compact Binary Alert Packet (Header + Events + CRC32) |
+| **{packet_label}** | **{packet_size} Bytes** | {packet_meaning} |
 | **Bandwidth Reduction (vs Raw)** | **`{reduction_txt}`** | **Total space-to-ground downlink data saved** |
 | **Edge Advantage (vs zlib)** | **`{edge_adv_txt}`** | **`{zlib_savings_pct:.1f}%` saved over lossless image compression** |
 | **Events Detected** | **{len(events)}** | {'Transmitted top 6 in alert' if len(events)>6 else 'All clusters encoded'} |
@@ -644,6 +726,151 @@ def run_inference(
         reduction_md,
         metrics_summary_md
     )
+
+
+def run_full_scene_from_ui(uploaded_file, model_variant: str, thread_mode: str,
+                           enable_scrub: bool, threshold: float):
+    """Launch the bounded-memory full-scene verifier from the local dashboard.
+
+    The verifier is kept in a child process so its tile buffers and ONNX session
+    are released immediately when the scene finishes, rather than accumulating
+    in the Gradio server process.
+    """
+    if uploaded_file is None:
+        return ("[ERROR] Upload a raw Landsat GeoTIFF before starting full-scene verification.",) + (None,) * 8
+
+    source_path = Path(uploaded_file.name if hasattr(uploaded_file, "name") else str(uploaded_file))
+    if not source_path.is_file():
+        return (f"[ERROR] File not found: {source_path}",) + (None,) * 8
+
+    model = "int8" if "INT8" in model_variant else "fp32"
+    threads = "1" if "1 Thread" in thread_mode else "-1"
+    output_dir = DEMO_DIR / "full_scene_outputs" / source_path.stem
+    command = [
+        sys.executable,
+        str(DEMO_DIR / "run_full_scene.py"),
+        str(source_path),
+        "--output", str(output_dir),
+        "--model", model,
+        "--threads", threads,
+        "--threshold", str(threshold),
+    ]
+    if enable_scrub:
+        command.append("--scrub")
+
+    started = time.perf_counter()
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+    except Exception as e:
+        return (f"[ERROR] Could not start the local full-scene verifier: {e}",) + (None,) * 8
+
+    console = (completed.stdout + "\n" + completed.stderr).strip()
+    manifest_path = output_dir / "scene_manifest.json"
+    if completed.returncode != 0 or not manifest_path.is_file():
+        tail = console[-4000:] if console else "No console output was captured."
+        return (f"""### {SVG_SHIELD_ALERT} Full-Scene Verification Failed
+The bounded-memory runner ended with exit code `{completed.returncode}`.
+
+```text
+{tail}
+```""",) + (None,) * 8
+
+    try:
+        report = json.loads(manifest_path.read_text(encoding="utf-8"))
+        summary = report["summary"]
+        stages = report["stage_mean_ms_per_reached_tile"]
+        status_rows = " · ".join(f"{name}: {count}" for name, count in summary["statuses"].items()) or "none"
+        stage_rows = " · ".join(
+            f"{key.replace('_ms', '')}: {value:.2f} ms"
+            for key, value in stages.items() if value is not None
+        )
+        reduction = summary["raw_to_packet_reduction"]
+        reduction_text = f"{reduction:,.0f}×" if reduction is not None else "no packets emitted"
+        audit = report.get("pipeline_execution_audit", {})
+        gate1_audit = audit.get("gate1", {})
+        gate2_audit = audit.get("gate2", {})
+        gate2_statuses = " · ".join(
+            f"{name}: {count}" for name, count in gate2_audit.get("statuses", {}).items()
+        ) or "not recorded"
+        gate2_reasons = " · ".join(gate2_audit.get("rejection_or_warning_reasons", {})) or "none"
+        benchmark = report.get("benchmark_reference") or next(
+            (item for item in MANIFEST_DATA["test_results_by_config"] if item["config"] == "pereira3c"), {}
+        )
+        evaluation_md = f"""### {SVG_TARGET} Model Evaluation Reference and Pipeline Audit
+
+**Validated-model reference — Pereira C7+C6+C2 test split; this is not a score for the unlabelled uploaded scene.**
+
+| Pixel / event metric | Reference value |
+| :--- | ---: |
+| F1 / IoU | **{benchmark.get('F1', 0):.4f}** / **{benchmark.get('IoU', 0):.4f}** |
+| Precision / Recall | **{benchmark.get('precision', 0):.4f}** / **{benchmark.get('recall', 0):.4f}** |
+| Frame recall / frame false-alarm rate | **{benchmark.get('frame_recall', 0):.4f}** / **{benchmark.get('false_alarm_rate', 0):.4f}** |
+| Event recall / event precision | **{benchmark.get('event_recall_all', 0):.4f}** / **{benchmark.get('event_precision', 0):.4f}** |
+| False events per patch | **{benchmark.get('false_events_per_patch', 0):.4f}** |
+| Tiny U-Net parameters / compute | **{benchmark.get('params', 0):,}** / **{benchmark.get('MACs_G', 0):.3f} GMAC** |
+| Calibrated threshold | **{benchmark.get('threshold', threshold):.2f}** |
+
+**This full-scene execution audit**
+
+| Implemented stage | Evidence from this run |
+| :--- | :--- |
+| Gate 1 — input quality | {gate1_audit.get('tiles_inspected', 0)} inspected; **{gate1_audit.get('tiles_passed_to_preprocessing', 0)}** passed; **{gate1_audit.get('tiles_rejected', 0)}** rejected; {gate1_audit.get('isolated_transients_scrubbed', 0)} isolated saturated pixels scrubbed |
+| Conditioning → neural inference → calibration → extraction | **{gate1_audit.get('tiles_passed_to_preprocessing', 0)}** tiles reached these stages; timings are reported above |
+| Gate 2 — output plausibility | **{gate2_audit.get('tiles_reached', 0)}** tiles checked; statuses: **{gate2_statuses}**; warnings/rejections: {gate2_reasons} |
+| Packet serialization | **{audit.get('packet_output', {}).get('crc_valid_packets', 0)}** CRC32-valid packets of {audit.get('packet_output', {}).get('packets_emitted', 0)} emitted |
+
+Gate 2 in this implementation validates finite probability range, event geometry/area, and a per-tile 5% fire-occupancy plausibility threshold. It does **not** perform thermal-contrast verification: this deployed model is C7+C6+C2 SWIR/Blue, and its packet is the implemented custom V3/CRC32 format rather than CCSDS/CRC-16."""
+        preview_files = report.get("preview_files", {})
+        preview_paths = [str(output_dir / preview_files[key]) if key in preview_files else None for key in (
+            "false_color", "probability", "binary_mask", "overlay"
+        )]
+        selected_packet = next((packet for packet in report["packets"] if packet["status"] == "ALERT"), None)
+        if selected_packet is None and report["packets"]:
+            selected_packet = report["packets"][0]
+        if selected_packet:
+            selected_packet_path = output_dir / selected_packet["packet_file"]
+            selected_packet_bytes = selected_packet_path.read_bytes()
+            raw_packet_hex = format_hex_dump(selected_packet_bytes)
+            decoded_packet = json.dumps(decode_packet(selected_packet_bytes), indent=2)
+            packet_note = (f"Showing packet from alert tile **#{selected_packet['tile_id']}** "
+                           if selected_packet["status"] == "ALERT" else
+                           f"No alert packet was emitted; showing the first status packet from tile **#{selected_packet['tile_id']}** ")
+        else:
+            raw_packet_hex = "[No packet emitted]"
+            decoded_packet = "{\n  \"status\": \"NO_PACKET_EMITTED\"\n}"
+            packet_note = "No packet was emitted. "
+        result_md = f"""### {SVG_SHIELD_CHECK} Full-Scene Verification Complete
+
+| Result | Value |
+| :--- | ---: |
+| Tiles processed | **{summary['tiles_processed']}/{report['metadata']['tiles_available']}** |
+| Wall time | **{summary['wall_time_seconds']:.2f} s** |
+| Throughput | **{summary['throughput_tiles_per_second']:.2f} tiles/s** |
+| Detected events (before per-packet limit) | **{summary['events_detected_before_packet_limit']}** |
+| Emitted CRC-protected packets | **{summary['packets_emitted']}** ({summary['packet_bytes_total']:,} B total) |
+| Selected-band raw → packet reduction | **{reduction_text}** |
+
+**Tile statuses:** {status_rows}
+
+**Mean measured stage time per reached tile:** {stage_rows}
+
+{packet_note}Its raw bytes and decoded fields are shown below. The downloadable manifest maps every packet to its source tile and records its CRC result. The run used a child process and completed in `{time.perf_counter() - started:.2f} s` from the interface."""
+    except Exception as e:
+        result_md = f"### {SVG_INFO} Full-Scene Verification Complete\nManifest created, but the dashboard could not summarize it: `{e}`."
+        evaluation_md = ""
+        preview_paths = [None] * 4
+        raw_packet_hex = "[Packet preview unavailable]"
+        decoded_packet = "{\n  \"status\": \"MANIFEST_SUMMARY_ERROR\"\n}"
+
+    return (result_md, evaluation_md, str(manifest_path), *preview_paths, raw_packet_hex, decoded_packet)
 
 
 def run_benchmark_30(model_variant: str, thread_mode: str, enable_scrub: bool):
@@ -1484,8 +1711,14 @@ with gr.Blocks(**_blocks_kwargs) as demo:
                     )
 
                 with gr.TabItem("Custom GeoTIFF Upload"):
+                    gr.Markdown(
+                        "Upload one raw Landsat Level-1 DN GeoTIFF: a 10+ band stack, or a three-band "
+                        "stack ordered `[C7, C6, C2]`. Any image dimensions are split into padded 256×256 "
+                        "tiles; every tile runs Gate 1, preprocessing, inference, calibration, event extraction, "
+                        "Gate 2, and packet serialization. Scene outputs and stage totals appear after execution."
+                    )
                     upload_file = gr.File(
-                        label="Upload Landsat 10-band or 3-band [C7,C6,C2] .tif",
+                        label="Upload raw Landsat GeoTIFF (10+ bands, or ordered [C7,C6,C2])",
                         file_types=[".tif", ".tiff"],
                         type="filepath"
                     )
@@ -1515,12 +1748,42 @@ with gr.Blocks(**_blocks_kwargs) as demo:
                 )
 
             run_btn = gr.Button("Execute Edge Pipeline", variant="primary", size="lg")
+            full_scene_btn = gr.Button(
+                "Verify Full Scene (Streaming, Local)",
+                variant="secondary",
+                size="lg",
+            )
             bench_btn = gr.Button("Run 30-Iteration Hardware Benchmark", variant="secondary")
 
             bench_output = gr.Markdown()
 
         # RIGHT RESULTS COLUMN
         with gr.Column(scale=2):
+            with gr.Accordion("Full-Scene Verification Results", open=True):
+                full_scene_status = gr.Markdown(
+                    "Upload a full raw Landsat GeoTIFF, then use **Verify Full Scene**. "
+                    "This path streams 256×256 tiles and does not render a full-resolution scene in the browser."
+                )
+                full_scene_evaluation = gr.Markdown()
+                full_scene_manifest = gr.File(label="Download full-scene packet manifest", interactive=False)
+                with gr.Row():
+                    full_scene_false_color = gr.Image(label="Full-Scene False-Color Overview", type="filepath")
+                    full_scene_probability = gr.Image(label="Full-Scene Fire Probability Overview", type="filepath")
+                with gr.Row():
+                    full_scene_mask = gr.Image(label="Full-Scene Binary Fire Mask Overview", type="filepath")
+                    full_scene_overlay = gr.Image(label="Full-Scene Detection Overlay Overview", type="filepath")
+                with gr.Row():
+                    full_scene_raw_packet = gr.Textbox(
+                        label="Selected Alert Packet — Raw Hex (CRC included)",
+                        lines=12,
+                        max_lines=18,
+                    )
+                    full_scene_decoded_packet = gr.Code(
+                        label="Selected Alert Packet — Decoded Fields",
+                        language="json",
+                        lines=12,
+                    )
+
             with gr.Row():
                 telemetry_box = gr.Markdown()
                 reduction_box = gr.Markdown()
@@ -1585,6 +1848,23 @@ with gr.Blocks(**_blocks_kwargs) as demo:
             threshold_slider
         ],
         outputs=outputs_list
+    )
+
+    full_scene_btn.click(
+        fn=run_full_scene_from_ui,
+        concurrency_id="full_scene",
+        inputs=[upload_file, model_selector, thread_selector, scrub_checkbox, threshold_slider],
+        outputs=[
+            full_scene_status,
+            full_scene_evaluation,
+            full_scene_manifest,
+            full_scene_false_color,
+            full_scene_probability,
+            full_scene_mask,
+            full_scene_overlay,
+            full_scene_raw_packet,
+            full_scene_decoded_packet,
+        ],
     )
 
     sample_dropdown.change(
