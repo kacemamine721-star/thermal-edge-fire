@@ -347,7 +347,6 @@ agreement, golden vectors; tests that need a missing model or sample are skipped
 cd demo
 python test_demo.py
 ```
-`````
 
 ### Run with Docker
 
