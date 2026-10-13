@@ -74,7 +74,7 @@ Thermal-Edge-Fire addresses this as an **information-selection problem**:
 image frame → quality checks → segmentation → fire events → compact alert → priority queue
 ```
 
-The project extends the segmentation work of the Pereira ActiveFire benchmark
+The project extends the segmentation work of the [Pereira ActiveFire](https://github.com/pereira-gha/activefire) benchmark
 and the onboard prioritization pattern of [Chatar et al.](https://www.mdpi.com/2072-4292/16/10/1729#app1-remotesensing-16-01729) with:
 
 - input-quality screening and optional transient scrubbing;

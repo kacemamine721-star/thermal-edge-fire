@@ -69,41 +69,9 @@ At their selected operating points, Pereira-3C has the highest test F1 and IoU o
 
 The software pipeline is organized into six stages. Gate 1 and Gate 2 are software safeguards around the segmentation model; they are not proof of radiation tolerance or physical qualification.
 
-```text
-┌───────────────────────────────────────────────────────────────────────────┐
-│ 1. Gate 1 : Input-quality screening                                        │
-│    Shape/finite checks, dead bands/columns, saturation; optional          │
-│    isolated-saturated-pixel scrub and optional dead-column repair         │
-│    (both off by default)                                                  │
-└────────────────────────────────────┬──────────────────────────────────────┘
-                                     ▼
-┌───────────────────────────────────────────────────────────────────────────┐
-│ 2. Fixed input normalization                                              │
-│    DN → TOA-reflectance-style rescaling (no sun-angle correction).         │
-└────────────────────────────────────┬──────────────────────────────────────┘
-                                     ▼
-┌───────────────────────────────────────────────────────────────────────────┐
-│ 3. Neural segmentation                                                    │
-│    Tiny U-Net through ONNX Runtime (FP32 or INT8).                         │
-└────────────────────────────────────┬──────────────────────────────────────┘
-                                     ▼
-┌───────────────────────────────────────────────────────────────────────────┐
-│ 4. Probability transformation and thresholding                            │
-│    p = sigmoid(z / T), then threshold τ.                                   │
-└────────────────────────────────────┬──────────────────────────────────────┘
-                                     ▼
-┌───────────────────────────────────────────────────────────────────────────┐
-│ 5. Event extraction                                                      │
-│    8-connected components; bounding box, centroid, area, confidence,       │
-│    SWIR2 contrast; top 6 events kept.                                      │
-└────────────────────────────────────┬──────────────────────────────────────┘
-                                     ▼
-┌───────────────────────────────────────────────────────────────────────────┐
-│ 6. Gate 2 and packet generation                                           │
-│    Output-sanity checks (valid probabilities, box geometry, area > 0,      │
-│    warning if mask > 5% of tile); version-3 binary packet + CRC32.         │
-└───────────────────────────────────────────────────────────────────────────┘
-```
+<p align="center">
+  <img src="TEF_MAIN_ARCHITECTURE.png" alt="Thermal-Edge-Fire Six-Stage Processing Architecture" width="100%" />
+</p>
 
 The repository also contains a software model of a persistent, priority-based downlink queue (Section 13). The queue study is separate from the six per-tile inference stages and does not simulate a validated flight radio or orbital contact schedule.
 
@@ -129,7 +97,7 @@ Scrubbing is off by default because an intense one-pixel fire can saturate SWIR2
 For the reflective bands (C7, C6, C2) the model path applies
 
 $$
-x = \operatorname{clip}\left(DN \times 2.0\times10^{-5} - 0.1,\; 0,\; 1.6\right)
+x = \mathrm{clip}\left(DN \times 2.0\times10^{-5} - 0.1,\; 0,\; 1.6\right)
 $$
 
 with float32 output in [0, 1.6]. This is the USGS Level-1 rescaling to top-of-atmosphere planetary reflectance **without** the sun-elevation correction, ρ′ = M<sub>ρ</sub>·Q<sub>cal</sub> + A<sub>ρ</sub> (USGS, *Using the USGS Landsat Level-1 Data Product*), with the OLI metadata values M<sub>ρ</sub> = 2.0×10⁻⁵ and A<sub>ρ</sub> = −0.1. The same function is used for training, evaluation, ONNX calibration and the pipeline, so there is no train/deploy skew. The B10-only and hybrid configurations additionally convert B10 DN to brightness temperature with the TIRS constants (ML = 3.342×10⁻⁴, AL = 0.1, K1 = 774.8853, K2 = 1321.0789) and scale it as (T − 300 K)/30, clipped to [−3, 6]; the notebook sanity check maps DN 30,397 to 304.55 K.
