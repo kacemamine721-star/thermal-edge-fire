@@ -52,7 +52,7 @@ All test-split metrics below are on 4,781 held-out tiles (3,946 voting-fire, 835
 | One-event packet | 48 bytes | Protocol accounting |
 | Maximum six-event packet | 183 bytes | Protocol accounting |
 | Fire-free heartbeat | 21 bytes | Optional heartbeat every 30 frames |
-| Aggregate data reduction | 6,234.99× over 1,500 sampled test frames incl. heartbeats | Accounting on a fire-heavy sample (82% alert frames); see Section 13.3 for prevalence sensitivity |
+| Aggregate data reduction | 6,234.99× over 1,500 sampled test frames incl. heartbeats | Accounting on a fire-heavy sample (82% alert frames); see Section 12.4 for prevalence sensitivity |
 
 ### 2.2 Primary result in context
 
@@ -60,10 +60,10 @@ At their selected operating points, Pereira-3C has the highest test F1 and IoU o
 
 ### 2.3 What the benchmark does and does not measure
 
-1. The reference is an **algorithmic consensus** (≥ 2 of 3 reflectance/SWIR active-fire algorithms), not field truth (the test with the human-annotated are considered as field truth).
+1. The reference is an **algorithmic consensus** (≥ 2 of 3 reflectance/SWIR active-fire algorithms), not field truth. The 100-frame human-annotated set (Section 9) is an independent check against hand labels, but it is also image-based annotation, not field truth.
 2. The test split is **fire-heavy** (82.5% voting-fire tiles) and all scenes were acquired in **one month** (6–30 August 2020).
-3. The tiles labelled "fire-free" are in practice **no-consensus tiles**, 98% of them are tiles where exactly one of the three algorithms produced a mask (Section 4.4). The 6.3% frame false-alarm rate is a disagreement-with-consensus rate on those hard tiles; the false-alarm rate on truly empty scenes was **not measured**. It needs a dedicated benchmark with a specific annotated fire-free scenes.
-4. The deployment-relevant quantities (downlink bytes per orbit, alerts per day, alert precision) depend on the true prevalence of fire tiles in orbit, which this benchmark does not reproduce. Section 13.3 gives an analytical sensitivity study.
+3. The tiles labelled "fire-free" are in practice **no-consensus tiles**, 98% of them are tiles where exactly one of the three algorithms produced a mask (Section 4.4). The 6.3% frame false-alarm rate is a disagreement-with-consensus rate on those hard tiles; the false-alarm rate on truly empty scenes was **not measured**. It needs a dedicated benchmark of annotated fire-free scenes.
+4. The deployment-relevant quantities (downlink bytes per orbit, alerts per day, alert precision) depend on the true prevalence of fire tiles in orbit, which this benchmark does not reproduce. Section 12.4 gives an analytical sensitivity study.
 
 ## 3. Six-stage processing architecture
 
@@ -72,9 +72,9 @@ The software pipeline is organized into six stages. Gate 1 and Gate 2 are softwa
 ```text
 ┌───────────────────────────────────────────────────────────────────────────┐
 │ 1. Gate 1 : Input-quality screening                                        │
-│    Shape/finite checks; valid area; constant/dead bands; dead columns;      │
-│    saturation; count isolated saturated pixels (optional 3×3 median scrub, │
-│    OFF by default).                                                        │
+│    Shape/finite checks, dead bands/columns, saturation; optional          │
+│    isolated-saturated-pixel scrub and optional dead-column repair         │
+│    (both off by default)                                                  │
 └────────────────────────────────────┬──────────────────────────────────────┘
                                      ▼
 ┌───────────────────────────────────────────────────────────────────────────┐
@@ -105,7 +105,7 @@ The software pipeline is organized into six stages. Gate 1 and Gate 2 are softwa
 └───────────────────────────────────────────────────────────────────────────┘
 ```
 
-The repository also contains a software model of a persistent, priority-based downlink queue (Section 14). The queue study is separate from the six per-tile inference stages and does not simulate a validated flight radio or orbital contact schedule.
+The repository also contains a software model of a persistent, priority-based downlink queue (Section 13). The queue study is separate from the six per-tile inference stages and does not simulate a validated flight radio or orbital contact schedule.
 
 ### Stage 1 : Gate 1 input-quality screening
 
@@ -119,10 +119,10 @@ Checks implemented in the notebook reference (the demo port is described in Sect
 | A band ≥ 50% saturated (DN = 65,535) | Reject |
 | A band 2–50% saturated | Flagged |
 | Dead columns (all zero in one band while other bands have data) in > 20% of columns | Reject |
-| 1–20% dead columns | Reported in reasons but **not repaired** |
+| 1–20% dead columns | Reported in reasons; **not repaired** in the evaluated notebook run (the demo has an optional interpolation repair, off by default and not evaluated; Section 3.1) |
 | Isolated saturated pixels (≤ 1 saturated neighbour in the 3×3 window) | Counted, replaced by the 3×3 median only if `scrub=True` (default **False** to maintain scientific accuracy) |
 
-Scrubbing is off by default because an intense one-pixel fire can saturate SWIR2 and be indistinguishable from a transient (Section 12). The robustness experiments inject synthetic noise, transient spikes, dead columns and quantization. They are software stress tests, not physical radiation testing, and they show that dead columns remain highly damaging because Gate 1 flags but does not repair them.
+Scrubbing is off by default because an intense one-pixel fire can saturate SWIR2 and be indistinguishable from a transient (Section 11). The robustness experiments inject synthetic noise, transient spikes, dead columns and quantization. They are software stress tests, not physical radiation testing, and they show that dead columns remain highly damaging because, in the evaluated configuration, Gate 1 flags but does not repair them.
 
 ### Stage 2 : Fixed input normalization
 
@@ -152,15 +152,29 @@ For Pereira-3C, `T = 2.1227591254` and the selected threshold is `τ = 0.96` (on
 
 ### Stage 5 : Connected components and event features
 
-8-connectivity labelling; for each component the pipeline computes a pixel-space bounding box, centroid, pixel area, area in 0.1 ha units from the supplied GSD (default 30 m), a mean-probability confidence, and a SWIR2 contrast metric. Up to six events are kept, sorted by confidence then area. `MIN_EVENT_PIXELS = 1`: single-pixel detections are retained, and Section 8.3 shows why (raising the minimum to 2 pixels cuts frame recall from 0.966 to 0.696 on the pipeline sample). Geolocation comes from the GeoTIFF affine transform/CRS when valid; otherwise the event carries a no-geolocation flag.
+8-connectivity labelling; for each component the pipeline computes a pixel-space bounding box, centroid, pixel area, area in 0.1 ha units from the supplied GSD (default 30 m), a mean-probability confidence, and a SWIR2 contrast metric. Events are sorted by confidence then area and at most six are transmitted; the demo records how many more were dropped (Section 12.5). `MIN_EVENT_PIXELS = 1`: single-pixel detections are retained, and Section 8.3 shows why (raising the minimum to 2 pixels cuts frame recall from 0.966 to 0.696 on the pipeline sample). Geolocation comes from the GeoTIFF affine transform/CRS when valid; otherwise the event carries a no-geolocation flag.
 
-**Confidence semantics.** In the notebook, event confidence is the mean temperature-scaled pixel probability inside the component, optionally mapped through an **event-level isotonic table** (per predicted-size class, fitted on the validation calibration scenes; Section 8.4). The table is installed before the pipeline cell runs, so packets written by the notebook carry the isotonic-calibrated value (the sample packet's 0.9885 is below the ≈ 0.9998 raw mean probability of a one-pixel event). Confidence therefore means *probability that the event agrees with the SWIR-voting reference within 3 px*, not probability of a real wildfire. The demo must be checked to confirm which of the two variants it applies (Section 3.1).
+**Confidence semantics.** In the notebook, event confidence is the mean temperature-scaled pixel probability inside the component, optionally mapped through an **event-level isotonic table** (per predicted-size class, fitted on the validation calibration scenes; Section 8.4). The table is installed before the pipeline cell runs, so packets written by the notebook carry the isotonic-calibrated value (the sample packet's 0.9885 is below the ≈ 0.9998 raw mean probability of a one-pixel event). Confidence therefore means *probability that the event agrees with the SWIR-voting reference within 3 px*, not probability of a real wildfire. The demo applies the raw mean probability without the table (Section 3.1), so its packets carry a different confidence value from the notebook's.
 
 ### Stage 6 : Gate 2 and packet encoding
 
-`Gate2` rejects the output if the probability map is non-finite or outside [0, 1], if an event box leaves the 256×256 frame, or if an event's `area_ha_x10` is ≤ 0. It raises only a **warning** when more than 5% of the tile is above threshold. Passing Gate 2 is a software consistency check; it does not test whether a detection is physically a wildfire (there is no thermal-contrast or cloud/glint test in the current implementation). Note the `area_ha_x10 ≤ 0` rejection interacts with the packet's 0.1-ha quantization at fine ground sampling (Section 13.1).
+`Gate2` rejects the output if the probability map is non-finite or outside [0, 1], if an event box leaves the 256×256 frame, or if an event's `area_ha_x10` is ≤ 0. It raises only a **warning** when more than 5% of the tile is above threshold. Passing Gate 2 is a software consistency check; it does not test whether a detection is physically a wildfire (there is no thermal-contrast or cloud/glint test in the current implementation). In the notebook run, the `area_ha_x10 ≤ 0` rejection interacts with the packet's 0.1-ha quantization at fine ground sampling (Section 12.5); the demo floors the area field at 1.
 
-The packet encoder writes a little-endian version-3 binary packet with a CRC32 checksum (Section 13).
+The packet encoder writes a little-endian version-3 binary packet with a CRC32 checksum (Section 12).
+
+## Notebook reference versus demo implementation
+
+The demo (`demo/pipeline.py`) is a port of the notebook pipeline and was checked against it line by line for this revision. Model, normalisation, temperature, threshold, Gate 1 checks (per-band, transients in every band), the event contrast metric (p95 of C7 reflectance in the component minus the median of a 5-pixel ring), 8-connected labelling, Gate 2, event ordering and the version-3 packet layout are the same. The event-level metrics in `demo/metrics.py` use the notebook's matching (8-connected clusters, 3-pixel dilation). The remaining differences, none of which changes the pixel-level or frame-level results of Sections 6–12 (those come from the notebook):
+
+| Aspect | Notebook run behind Sections 6–12 | Demo |
+|---|---|---|
+| Event confidence | Mean probability mapped by the isotonic table | Raw mean temperature-scaled probability (table not loaded) |
+| Event area field | `round(px · gsd² / 1000)`, can be 0 below about 22 m GSD (Gate 2 then rejects the event) | Floored at 1 |
+| Events beyond six | Dropped without a count | Dropped; the number dropped (saturating at 15) is stored in bits 4–7 of the last event's flags byte; layout and byte counts unchanged |
+| Dead-column repair | None (flag only) | Optional linear interpolation, **off by default**, not part of any reported result |
+| Decoder on a bad packet | Raises on CRC or length mismatch | Returns `crc_valid` / `length_valid` so the UI can display the failure |
+
+The demo's reference comparison for a single tile (pixel and event metrics against the voting mask) is an illustration and must not be quoted as the test-set result; the test-set values are in Sections 6 and 8.
 
 ## 4. Sensor bands, dataset and labels
 
@@ -222,9 +236,9 @@ The patch inventory shows how the voting-zero class arises:
 | 2 | 4,815 | 91 |
 | 3 | 17,685 | 0 |
 
-A vote of two cannot be reached when only one algorithm produced a mask, so 98.3% of the "fire-free" tiles (5,138 of 5,229; 815 of 835 in the test split) are tiles on which **exactly one SWIR algorithm fired** and consensus failed. They are hard, ambiguous negatives, not empty scenes. This matters in two directions: the 6.3% frame false-alarm rate is a measure of agreement with a stricter consensus on tiles where a SWIR algorithm itself saw something; and the benchmark contains no clean empty-scene negatives, so the false-alarm rate on genuinely empty orbit data is unknown. .
+A vote of two cannot be reached when only one algorithm produced a mask, so 98.3% of the "fire-free" tiles (5,138 of 5,229; 815 of 835 in the test split) are tiles on which **exactly one SWIR algorithm fired** and consensus failed. They are hard, ambiguous negatives, not empty scenes. This matters in two directions: the 6.3% frame false-alarm rate is a measure of agreement with a stricter consensus on tiles where a SWIR algorithm itself saw something; and the benchmark contains no clean empty-scene negatives, so the false-alarm rate on genuinely empty orbit data is unknown.
 
-The positive-tile proportion is high in all splits. Frame false-alarm rate on voting-zero tiles is not the same as the false-alert workload of a deployed system (Section 13.3).
+The positive-tile proportion is high in all splits. Frame false-alarm rate on voting-zero tiles is not the same as the false-alert workload of a deployed system (Section 12.4).
 
 ## 5. Model architecture, training and selection
 
@@ -398,7 +412,7 @@ An isotonic mapping from mean calibrated probability to "event agrees with the v
 | 26–100 px | 183 | 1.000 | 0.9991 | 0.976 |
 | > 100 px | 16 | 1.000 | 0.9986 | 0.967 |
 
-Expected calibration error on test: 0.0150 (raw mean probability) → 0.0020 (isotonic). However, 8,357 of the 8,365 test events fall in the single 0.9–1.0 confidence bin (observed real fraction 0.984). The confidence is well calibrated but **almost non-discriminating**: every event is reported at ≈ 0.97–0.99. Event-level priority therefore depends mainly on the contrast and area terms of the urgency score (Section 13.4).
+Expected calibration error on test: 0.0150 (raw mean probability) → 0.0020 (isotonic). However, 8,357 of the 8,365 test events fall in the single 0.9–1.0 confidence bin (observed real fraction 0.984). The confidence is well calibrated but **almost non-discriminating**: every event is reported at ≈ 0.97–0.99. Event-level priority therefore depends mainly on the contrast and area terms of the urgency score (Section 13.1).
 
 ## 9. Manual-label zero-shot evaluation
 
@@ -455,7 +469,7 @@ INT8 changes pixel F1 by −0.0007, frame recall by −0.0016 and frame FAR by +
 | Packet encoding | 0.045 ms | 0.045 ms | 0.083 ms | 0.103 ms |
 | **Total pipeline** | **65.677 ms** | **64.376 ms** | **77.680 ms** | **91.300 ms** |
 
-Inference is 88% of the mean latency; the long tail of the decision stage comes from tiles with many connected components. The sum of stage means (65.72 ms) exceeds the total mean (65.68 ms) because frames that skip a stage do not contribute to that stage's mean. The reciprocal of the mean (≈ 15.2 tiles/s) is a host estimate, not a spacecraft throughput guarantee, and the 100 ms comparison figure is a project-level reference target. Embedded performance must be measured with the intended runtime, memory limits, input I/O and power configuration; the Raspberry Pi benchmark bundle (FP32/INT8 models, sample input, README with power-measurement procedure) is prepared but has not been run.
+Inference is 88% of the mean latency; the long tail of the decision stage comes from tiles with many connected components. The sum of stage means (65.72 ms) exceeds the total mean (65.68 ms) because frames that skip a stage do not contribute to that stage's mean. The reciprocal of the mean (≈ 15.2 tiles/s; 15.5 tiles/s from the p50 shown in the demo) is a host estimate and the 100 ms comparison figure is a project-level reference target. Embedded performance must be measured with the intended runtime, memory limits, input I/O and power configuration; the Raspberry Pi benchmark bundle (FP32/INT8 models, sample input, README with power-measurement procedure) is prepared but has not been run.
 
 ## 11. Synthetic robustness evaluation
 
@@ -490,7 +504,7 @@ Inference is 88% of the mean latency; the long tail of the decision stage comes 
 ### Interpretation
 
 * **Gate 1 scrub works against injected transients, at a cost to real fires.** With 20 injected saturated pixels per frame, scrubbing moves pixel F1 from 0.672 to 0.943 and frame FAR from 1.000 to 0.073; with 80, from 0.351 to 0.940. On clean data, scrubbing lowers pixel recall from 0.954 to 0.939 and pixel F1 from 0.952 to 0.945 because isolated saturated pixels include real one-pixel fires. This is the reason scrubbing is off by default.
-* **The model is very sensitive to isolated saturated pixels and dead columns.** Even five injected saturated pixels per frame push frame FAR to 0.82, and a single dead column in one band raises it to 0.36. Gate 1 flags up to 20% dead columns but does not repair them; column-defect masking/inpainting is an open item.
+* **The model is very sensitive to isolated saturated pixels and dead columns.** Even five injected saturated pixels per frame push frame FAR to 0.82, and a single dead column in one band raises it to 0.36. In the evaluated configuration Gate 1 flags up to 20% dead columns but does not repair them. A linear-interpolation repair exists in the demo (off by default); its effect on these scenarios has not been measured, so no result is claimed for it.
 * **Noise and quantization are tolerated up to the middle level.** Quantization to 8 bits has no measurable effect; noise at σ = 800 DN raises frame FAR to 0.31.
 * These are synthetic input perturbations on one random sample, evaluated with the PyTorch model, without confidence intervals. They are not radiation tests, SEU/latch-up tests or a sensor-specific noise model (Landsat is not a microbolometer and no non-uniformity-correction stage is implemented).
 
@@ -506,7 +520,7 @@ The packet format is version 3, little-endian, implemented in the notebook (`enc
 | Event record (`<iiHHHHHHHHHB`) | 27 bytes each | Latitude and longitude (×10⁻⁷ degrees, i32), pixel box x, y, w, h, area in 0.1 ha units, confidence (u16), contrast metric (u16), GSD (m), geolocation uncertainty (m), event flags |
 | CRC32 trailer | 4 bytes | CRC32 over header and event records |
 
-The header carries a **model ID**, not a satellite ID. The format is a custom binary format, not a CCSDS Space Packet (CCSDS framing is future work). Header flags: input rejected (1), output rejected (2), transients scrubbed (4), saturated input (8), Gate 2 warning (16), heartbeat (32), time unavailable (64), reference only (128). Event flags: no geolocation (1), geolocation uncertainty unknown (2), spectral metric (4), thermal metric (8).
+The header carries a **model ID**, not a satellite ID. The format is a custom binary format, not a CCSDS Space Packet (CCSDS framing is future work). Header flags: input rejected (1), output rejected (2), input modified by Gate 1 (4: transient scrub; in the demo also dead-column repair), saturated input (8), Gate 2 warning (16), heartbeat (32), time unavailable (64), reference only (128). Event flags (bits 0–3): no geolocation (1), geolocation uncertainty unknown (2), spectral metric (4), thermal metric (8). Bits 4–7 of the event flags byte are unused in the evaluated notebook run; the demo uses them for the dropped-event counter (Section 12.5).
 
 **Decoded sample packet** (first alert of the pipeline run, 48 bytes): one event, box 1×1 pixel at (245, 156), `area_ha_x10 = 1` (0.09 ha rounded to 0.1 ha), confidence 64,782 / 65,535 = 0.9885, SWIR2 contrast 2,089 / 10,000 = 0.209 reflectance, GSD 30 m, geolocation uncertainty 65,535 (unknown), event flags 6 (uncertainty unknown + spectral metric), header flags 64 (acquisition time unavailable: Landsat patches carry no timestamp, so the field is zero and flagged rather than invented).
 
@@ -545,8 +559,9 @@ The projected 6,400× at the benchmark prevalence agrees with the measured 6,235
 
 ### 12.5 Known packet-format limits
 
-* `area_ha_x10` is rounded to 0.1 ha units. A one-pixel event at 30 m is 0.09 ha (stored as 1), but at a GSD below about 22 m a single pixel rounds to 0 and Gate 2 then **rejects** the event (`area_ha_x10 ≤ 0`). This is harmless at the Landsat reference GSD but would drop small events at the 5 m class GSD of KITSUNE-type payloads; a version-4 layout (pixel count instead of 0.1-ha units, plus a dropped-event counter) is prepared in the working notebook but is not the default.
-* Events beyond six are dropped without a count.
+* `area_ha_x10` is rounded to 0.1 ha units. A one-pixel event at 30 m is 0.09 ha (stored as 1), but at a GSD below about 22 m a single pixel rounds to 0 and, in the evaluated notebook run, Gate 2 then **rejects** the event (`area_ha_x10 ≤ 0`). This is harmless at the Landsat reference GSD but would drop small events at the 5 m class GSD of KITSUNE-type payloads. The demo floors the field at 1 (a lower bound, not a measurement); a layout carrying the pixel count instead of 0.1-ha units remains future work.
+* Events beyond six are not transmitted. The evaluated notebook run did not record how many were dropped. The demo stores the count, saturating at 15, in bits 4–7 of the flags byte of the last transmitted event; the version-3 layout and the 183-byte maximum are unchanged. This change was made after the evaluation run and does not affect the reported detection metrics or byte counts.
+* The format is a custom binary format, not a CCSDS Space Packet.
 * The area field is a detected-pixel footprint, not a burning area.
 
 ### 12.6 Heartbeat behaviour
@@ -601,7 +616,7 @@ The main UI in `demo/app.py` exposes:
 - **Custom GeoTIFF Upload:** a `.tif`/`.tiff` containing either a 10-band Landsat/Pereira patch from which the demo reads bands `[7, 6, 2]`, or a three-band file already ordered `[C7, C6, C2]`.
 - **Model variant:** the bundled Pereira-3C INT8 model (≈ 514.8 KiB) or FP32 model (≈ 1.85 MiB).
 - **Thread mode:** one-thread or all-available-core inference; the hosted constrained configuration forces one thread.
-- **Gate 1 scrub toggle:** enables the isolated-saturated-pixel median scrub.
+- **Gate 1 scrub toggle:** enables the isolated-saturated-pixel median scrub. Gate 1 findings (for example dead columns, saturation) are listed in the telemetry panel.
 - **Decision threshold slider:** 0.50–0.99; changing it changes the operating point and must not be mistaken for the fixed benchmark threshold (0.96).
 - **Execute Edge Pipeline** and **Run 30-Iteration Hardware Benchmark** (software latency on the machine hosting the app; not a flight-hardware benchmark despite the button wording).
 
@@ -615,7 +630,7 @@ Uploaded files are expected to be raw Landsat Level-1-style 16-bit DN. `demo/io_
 | Probability heatmap | Temperature-scaled pixel score, 0–1 |
 | Binary segmentation mask | Pixels at or above the current threshold |
 | Detection overlay | Predicted mask and event bounding boxes on the composite |
-| Ground-truth comparison | When a matching voting mask exists, pixel/event metrics against the Pereira voting reference |
+| Reference-mask comparison | When a matching voting mask exists, pixel/event metrics against the Pereira voting reference (on a fire-free reference tile: false pixels and events only) |
 | Event and packet JSON | Decoded fields and event records |
 | Hex dump and protocol dissector | Packet bytes with header, event-record and CRC fields explained |
 | Pipeline telemetry | Per-stage timing, wall time, and FP32/INT8 mask agreement on the current tile when both models load |
@@ -637,11 +652,13 @@ demo/
 ├── metrics.py                # Pixel and event metric calculations for the demo
 ├── decode_packet.py          # Command-line packet decoder/dissector
 ├── generate_golden.py        # Generates golden/reference outputs for checks
+├── test_demo.py              # Unit, parity and golden tests (pytest or `python test_demo.py`)
+├── make_demo_manifest.py     # Builds models/manifest.json and CHECKSUMS.txt from the notebook manifest
 ├── icons.py                  # UI icon and badge helpers
 ├── models/
 │   ├── unet_pereira3c_fp32.onnx
 │   ├── unet_pereira3c_int8.onnx
-│   ├── manifest_v7.json      # Bands, model IDs, threshold, packet and benchmark metadata
+│   ├── manifest.json      # Bands, model IDs, threshold, packet and benchmark metadata
 │   └── CHECKSUMS.txt         # Expected model-file checksums
 ├── sample_data/              # Patches, masks, custom examples, golden.json
 ├── requirements.txt
@@ -651,7 +668,7 @@ demo/
 
 The live demo is linked from `README.md` (<https://thermal-edge-fire.onrender.com>). Availability and latency depend on the hosting platform, and hosted-cloud latency is not comparable to the controlled benchmark.
 
-### 14.5 Run the demo locally
+### 14.4 Run the demo locally
 
 ```bash
 cd demo
@@ -675,20 +692,20 @@ The container limits describe a reproducible demo environment, not spacecraft po
 2. **Single acquisition month and single training run per configuration:** no seasonal, biome or seed variability is reported.
 3. **Label circularity:** reference masks are SWIR/reflectance-derived; the human-annotated set has 100 frames, all with fire.
 4. **Event metrics use a 3-pixel tolerance** and are not strict one-to-one assignments.
-5. **Event confidence** is calibrated to agreement with the voting reference, is nearly constant, and may differ between notebook and demo (Section 3.1).
-6. **Gate 1** flags but does not repair dead columns; dead columns and isolated saturated pixels are the dominant failure modes (Section 11).
+5. **Event confidence** is calibrated to agreement with the voting reference, is nearly constant, and differs between notebook (isotonic table) and demo (raw mean) (Section 3.1).
+6. **Gate 1** flags but does not repair dead columns in the evaluated configuration; dead columns and isolated saturated pixels are the dominant failure modes (Section 11).
 7. **Gate 2** is a sanity check (valid probabilities, geometry, extent warning); it does not test thermal contrast, cloud or glint.
-8. **Packet v3** is a custom format; small-GSD area rounding can cause rejection; events beyond six are dropped without a count.
+8. **Packet v3** is a custom format; small-GSD area rounding can cause rejection in the evaluated notebook run (the demo floors the field at 1); events beyond six are not transmitted, and only the demo records how many were dropped (Section 12.5).
 9. **INT8** is smaller but not faster on the host; embedded speed is unmeasured.
 10. **Queue results** are a software simulation with a circular urgency definition and synthetic arrivals.
 11. **No flight qualification:** no onboard latency, peak RAM, energy per tile, payload sensor characterization, radiation campaign, orbital contact or RF-link throughput is established by these files. A design power budget (for example below 2 W) is unmeasured and should be described as a target.
 
-## 17. Reproducible result files and entry points
+## 16. Reproducible result files and entry points
 
 | Repository path | Purpose |
 |---|---|
 | `notebooks/03_SPACETOON_IASTAM_MODEL_PROTOTYPE_PHASE3.ipynb` | Training/evaluation pipeline, validation selection, robustness and manual-label workflow |
-| `demo/models/manifest_v7.json` | Model configuration, calibration, threshold, packet and stored result metadata |
+| `demo/models/manifest.json` | Model configuration, calibration, threshold, packet and stored result metadata |
 | `reports/model_benchmarks/test_results_by_config.csv` | Held-out test metrics across configurations |
 | `reports/model_benchmarks/test_by_fire_size_*.csv`, `test_event_recall_*.csv` | Size-stratified pixel/frame and event results per configuration |
 | `reports/model_benchmarks/split_summary.csv`, `africa_inventory_split.csv` | Split counts; per-patch inventory with scene, split, algorithm-mask count |
@@ -703,10 +720,11 @@ The container limits describe a reproducible demo environment, not spacecraft po
 | `reports/model_benchmarks/queue_policy_comparison.csv` | Queue policy simulation |
 | `demo/sample_alert_packet.json` | Decoded example packet |
 | `demo/app.py`, `demo/pipeline.py`, `demo/io_tiff.py`, `demo/decode_packet.py` | Demo entry point, runtime, GeoTIFF I/O, packet decoder |
+| `demo/test_demo.py`, `demo/generate_golden.py`, `demo/sample_data/golden.json` | Demo verification tests and golden regression vectors (self-consistency of the demo, not a comparison against the notebook) |
 
 The notebook writes these files with a version suffix in their names; make sure the repository copies and these references agree.
 
-## 18. Conclusions and next validation steps
+## 17. Conclusions and next validation steps
 
 The repository supports describing Thermal-Edge-Fire as a **validated software information-extraction prototype on Landsat/Pereira data, with a proposed 6U-class edge-deployment architecture**. It supports reporting the Pereira-3C test metrics, the manual-label zero-shot results, host timing, synthetic robustness tests, compact-packet arithmetic and the queue simulation, with the caveats above.
 
@@ -714,7 +732,7 @@ Before making stronger operational or flight claims, the next engineering steps 
 
 1. measure the frame false-alarm rate and alert precision on genuinely empty, orbit-like scenes and report data reduction at realistic prevalences;
 2. test the exported models and full pipeline on target embedded hardware and record latency, peak memory and energy;
-3. add column-defect handling to Gate 1 and test transient handling that does not delete real one-pixel fires;
+3. measure the dead-column repair on the robustness scenarios (it exists in the demo but is unevaluated) and test transient handling that does not delete real one-pixel fires;
 4. align notebook and demo event-confidence semantics, or version the difference, and move the packet to a layout that survives fine ground sampling;
 5. validate the normalization against the exact source-product metadata and lock the input contract for the chosen flight sensor;
 6. evaluate a thermal payload with thermal-native labels or a validated simulated-raw sensor model; and
@@ -722,7 +740,7 @@ Before making stronger operational or flight claims, the next engineering steps 
 
 Until those tests are performed, "final production model", "flight proven", "deterministic detection", "radiation tolerant", "fits entirely in onboard SRAM" and "zero future false alarms" are not supported descriptions of the current implementation.
 
-## 19. References
+## 18. References
 
 - G. H. de Almeida Pereira, A. M. Fusioka, B. T. Nassu, R. Minetto, "Active fire detection in Landsat-8 imagery: A large-scale dataset and a deep-learning study," *ISPRS J. Photogramm. Remote Sens.*, vol. 178, pp. 171–186, 2021. doi: 10.1016/j.isprsjprs.2021.06.002.
 - K. Chatar, K. Kitamura, M. Cho, "Onboard Data Prioritization Using Multi-Class Image Segmentation for Nanosatellites," *Remote Sens.*, vol. 16, no. 10, p. 1729, 2024. doi: 10.3390/rs16101729.

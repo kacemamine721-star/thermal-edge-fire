@@ -7,7 +7,7 @@ Produces aerospace-grade visualization outputs:
   - Fire Probability Heatmap with calibrated colorbar
   - Binary Fire Mask (tau = 0.96)
   - Detection Overlay with event bounding boxes, confidence badges, and areas
-  - Ground Truth Error Map (Green=TP, Red=FP, Blue=FN)
+  - Reference-mask error map (Green=TP, Red=FP, Blue=FN)
 """
 
 from __future__ import annotations
@@ -58,7 +58,6 @@ def make_false_color(raw_3band: np.ndarray) -> np.ndarray:
     g = _percentile_stretch(raw_3band[1])  # C6
     b = _percentile_stretch(raw_3band[2])  # C2
 
-    # Fire enhancement: actively boost fire front visibility in false color
     rgb = np.stack([r, g, b], axis=-1)
     rgb_u8 = (rgb * 255.0).astype(np.uint8)
     return rgb_u8
@@ -165,7 +164,7 @@ def make_overlay(false_color: np.ndarray, binary_mask: np.ndarray,
 
 
 def make_gt_comparison(pred_mask: np.ndarray, gt_mask: np.ndarray) -> np.ndarray:
-    """3-panel visual comparison: Prediction vs Ground Truth vs Classification Error Map."""
+    """3-panel visual comparison: Prediction vs Reference Mask vs Error Map."""
     fig, axes = plt.subplots(1, 3, figsize=(12, 4), dpi=120)
     fig.patch.set_facecolor(COLOR_BG)
 
@@ -176,7 +175,7 @@ def make_gt_comparison(pred_mask: np.ndarray, gt_mask: np.ndarray) -> np.ndarray
 
     # Panel 2: Ground Truth
     axes[1].imshow(gt_mask, cmap="Greens", vmin=0, vmax=1, interpolation="nearest")
-    axes[1].set_title(f"Ground Truth ({int(gt_mask.sum())} px)", color=COLOR_TEXT, fontsize=10, fontweight="bold")
+    axes[1].set_title(f"Reference Mask ({int(gt_mask.sum())} px)", color=COLOR_TEXT, fontsize=10, fontweight="bold")
     axes[1].axis("off")
 
     # Panel 3: Error Classification Map

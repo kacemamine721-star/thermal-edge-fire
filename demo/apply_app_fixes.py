@@ -75,35 +75,9 @@ def patch_app(t):
     t = rep(t, "preset label sub-pixel", '"[Sub-Pixel] Emerging Fire (1 Fire Pixel · Sensitivity Test)"',
             '"[Small] Emerging Fire (1 Fire Pixel · Sensitivity Test)"', f)
 
-    # ---- reference mask: same rule as the training labels (>= 2 of 3 algorithms) ----
-    t = rep(t, "mask suffixes", 'for suffix in ("_gt.tif", ".tif"):', 'for suffix in ("_gt.tif", "_voting.tif", ".tif"):', f)
-    t = span(t, "reference mask voting rule",
-             "    algo_masks = []\n    for algo in (",
-             "\n\ndef format_hex_dump",
-             '    algo_masks = []\n'
-             '    seen = set()\n'
-             '    candidates = sorted(list(MASK_DIR.glob(f"{scene}_*_{pid}.tif")) + list(MASK_DIR.glob(f"{scene}_{pid}_*.tif")))\n'
-             '    for mpath in candidates:\n'
-             '        low = mpath.name.lower()\n'
-             '        if "kumar" in low and "roy" in low:\n'
-             '            algo = "kumar_roy"\n'
-             '        elif "murphy" in low:\n'
-             '            algo = "murphy"\n'
-             '        elif "schroeder" in low:\n'
-             '            algo = "schroeder"\n'
-             '        else:\n'
-             '            continue\n'
-             '        if algo in seen:\n'
-             '            continue\n'
-             '        seen.add(algo)\n'
-             '        with rasterio.open(mpath) as ds:\n'
-             '            algo_masks.append((ds.read(1) > 0).astype(np.uint8))\n'
-             '\n'
-             '    if not algo_masks:\n'
-             '        return None\n'
-             '\n'
-             '    # Same rule as the training labels: at least 2 of the 3 algorithms must agree (fewer masks -> no voting fire).\n'
-             '    return (np.sum(algo_masks, axis=0) >= 2).astype(np.uint8)\n', f)
+    # ---- reference mask: find_ground_truth_mask is deliberately left untouched ----
+    # The function is NOT changed (file suffixes, algorithm names and voting rule): the demo's sample masks use their own
+    # names ("Schroeder", "Murphy", "v2", "GOLI_v2") and the preset labels (125 / 33 / 1 / 118 fire pixels) depend on it.
 
     # ---- dissector ----
     t = rep(t, "dissector flag 4 name", '4: "TRANSIENTS_SCRUBBED"', '4: "INPUT_MODIFIED (scrub / dead-column repair)"', f)
@@ -250,7 +224,8 @@ def process(name, fn, check):
     if check:
         print(f"[{name}] would change (--check, nothing written)")
         return
-    shutil.copyfile(path, str(path) + ".bak")
+    if not Path(str(path) + ".bak").exists():          # never overwrite the first (original) backup
+        shutil.copyfile(path, str(path) + ".bak")
     out = new.replace("\n", "\r\n") if crlf else new
     path.write_bytes(out.encode("utf-8"))
     print(f"[{name}] patched ({'CRLF' if crlf else 'LF'} kept), backup: {name}.bak")

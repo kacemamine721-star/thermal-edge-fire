@@ -1,5 +1,5 @@
 {
-  "version": "V7 (multiband information-product pipeline)",
+  "version": "multiband information-product pipeline (Pereira-3C payload proxy)",
   "bands_cached": [
     "c2",
     "c6",
@@ -534,11 +534,11 @@
     }
   ],
   "artifacts": {
-    "fp32_onnx": "/kaggle/working/v7_outputs/unet_pereira3c_fp32.onnx",
-    "int8_onnx": "/kaggle/working/v7_outputs/unet_pereira3c_int8.onnx",
-    "sample_alert_packet_bin": "/kaggle/working/v7_outputs/sample_alert_packet.bin",
-    "sample_alert_packet_json": "/kaggle/working/v7_outputs/sample_alert_packet.json",
-    "pi_bundle": "/kaggle/working/v7_outputs/pi_bundle"
+    "fp32_onnx": "unet_pereira3c_fp32.onnx",
+    "int8_onnx": "unet_pereira3c_int8.onnx",
+    "sample_alert_packet_bin": "sample_alert_packet.bin",
+    "sample_alert_packet_json": "sample_alert_packet.json",
+    "pi_bundle": "pi_bundle"
   },
   "limitations": [
     "Pereira-3C (C7+C6+C2) is the current SWIR3 payload proxy; it is not the final flight sensor calibration.",
@@ -546,7 +546,7 @@
     "Landsat is not a microbolometer: no true NUC stage or sensor-specific microbolometer artifact model is implemented.",
     "Training labels are SWIR-algorithm outputs; SWIR inputs therefore have a built-in advantage on the voting-mask test.",
     "The dataset is detection-curated and fire-heavy; it is not an orbit-like prevalence test set.",
-    "The validation frame-recall/FAR mission targets may be infeasible; V7 reports that explicitly instead of silently claiming success.",
+    "The validation frame-recall/FAR mission targets may be infeasible; the report states that explicitly instead of silently claiming success.",
     "Gate 1 scrubbing is disabled by default because isolated 1-pixel fire detections can be removed; the robustness cell measures the trade-off.",
     "Acquisition timestamps and absolute geolocation uncertainty are not available in the current Landsat patch interface; packets flag these as unavailable rather than inventing values.",
     "The current pipeline GSD is a 30 m Landsat reference value; flight GSD must be supplied by the payload/geometry layer.",

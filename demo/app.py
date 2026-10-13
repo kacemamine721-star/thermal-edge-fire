@@ -3,12 +3,12 @@
 IASTAM — Edge-Native Spaceborne Fire Detection Web Demo
 ========================================================
 Interactive demonstration of the 6U CubeSat on-board processing pipeline:
-  Stage 1: Gate 1 (Input Quality Screening & Radiation SEU Filter)
+  Stage 1: Gate 1 (Input Quality Screening & Transient Filter)
   Stage 2: Fixed Radiometric Preprocessing (DN -> TOA Reflectance)
   Stage 3: Neural Segmentation (Tiny U-Net INT8 / FP32 ONNX Engine)
   Stage 4: Probability Calibration & Operating Thresholding (T=2.1228, tau=0.96)
   Stage 5: Event Extraction & Geometric Clustering (8-connectivity CCL)
-  Stage 6: Gate 2 (Sanity Validation) & Compact Binary Alert Packet (V3)
+  Stage 6: Gate 2 (Sanity Validation) & Compact Binary Alert Packet (version 3)
 """
 
 from __future__ import annotations
@@ -65,7 +65,9 @@ from io_tiff import SceneTiler, load_patch
 from metrics import compute_event_recall, compute_pixel_metrics
 from pipeline import (
     EMPTY_PACKET_BYTES,
+    FLAG_TIME_UNAVAILABLE,
     MANIFEST_DATA,
+    MAX_EVENTS,
     MAX_PACKET_BYTES,
     MODEL_ID,
     RAW_BYTES_PER_TILE,
@@ -123,16 +125,16 @@ INT8_MODEL_PATH = MODELS_DIR / "unet_pereira3c_int8.onnx"
 FP32_MODEL_PATH = MODELS_DIR / "unet_pereira3c_fp32.onnx"
 
 # Fallback paths if not yet in models/
-if not INT8_MODEL_PATH.exists():
-    fallback_v7 = REPO_ROOT.parent / "U_NET_MODEL_V7" / "fire_detection_V7_outputs_20261008_202441"
-    INT8_MODEL_PATH = fallback_v7 / "unet_pereira3c_int8.onnx"
-    FP32_MODEL_PATH = fallback_v7 / "unet_pereira3c_fp32.onnx"
+if not INT8_MODEL_PATH.exists() and os.environ.get("MODEL_FALLBACK_DIR"):
+    _fallback_dir = Path(os.environ["MODEL_FALLBACK_DIR"])
+    INT8_MODEL_PATH = _fallback_dir / "unet_pereira3c_int8.onnx"
+    FP32_MODEL_PATH = _fallback_dir / "unet_pereira3c_fp32.onnx"
 
 # ───────────────── Curated Sample Catalog ─────────────────
 PRESET_SAMPLES = {
     "[Severe] Large Wildfire (125 Fire Pixels · Severe Active Blaze)": "LC08_L1GT_226074_20200921_20200921_01_RT_p00811.tif",
     "[Cluster] Medium Wildfire (33 Fire Pixels · Active Cluster)": "LC08_L1GT_226074_20200921_20200921_01_RT_p00812.tif",
-    "[Sub-Pixel] Emerging Fire (1 Fire Pixel · Sensitivity Test)": "LC08_L1GT_117060_20200825_20200825_01_RT_p00625.tif",
+    "[Small] Emerging Fire (1 Fire Pixel · Sensitivity Test)": "LC08_L1GT_117060_20200825_20200825_01_RT_p00625.tif",
     "[Control] Fire-Free Vegetation Control (Zero-Fire Ground Truth)": "LC08_L1TP_001067_20200812_20200812_01_RT_p00000_clean_forest.tif",
     "[Deforestation] Amazon Wildfire (118 Fire Pixels · Active Front)": "LC08_L1TP_001067_20200812_20200812_01_RT_p00441.tif",
     "[Swath] Entire Satellite Scene (512×512 · Multi-Tile Onboard Tiler)": "LC08_SCENE_512x512_multitile_swath.tif",
@@ -244,7 +246,7 @@ def format_packet_dissector_md(packet_bytes: bytes, packet_json: Optional[Dict[s
     crc_valid = packet_json.get("crc_valid", True)
     flags = packet_json.get("flags", 0)
     flags_hex = packet_json.get("flags_hex", f"0x{flags:02X}")
-    _flag_names = {1: "INPUT_REJECTED", 2: "OUTPUT_REJECTED", 4: "TRANSIENTS_SCRUBBED", 8: "SATURATED_INPUT",
+    _flag_names = {1: "INPUT_REJECTED", 2: "OUTPUT_REJECTED", 4: "INPUT_MODIFIED (scrub / dead-column repair)", 8: "SATURATED_INPUT",
                    16: "GATE2_WARN", 32: "HEARTBEAT", 64: "TIME_UNAVAILABLE", 128: "REFERENCE_ONLY"}
     flags_txt = ", ".join(n for b, n in _flag_names.items() if int(flags) & b) or "Nominal"
     ver = int(packet_json.get("version", 3))
@@ -270,10 +272,17 @@ def format_packet_dissector_md(packet_bytes: bytes, packet_json: Optional[Dict[s
         conf = ev.get('confidence', 0.0) * 100
         area = ev.get('area_ha', 0.0)
         contrast = ev.get('contrast_val', 0.0)
+        loc_txt = ("Location unavailable (NO_GEO)" if int(ev.get('flags', 0)) & 1
+                   else f"Lat: {lat:+.4f}°, Lon: {lon:+.4f}°")
         x, y, w, h = ev.get('x', 0), ev.get('y', 0), ev.get('w', 0), ev.get('h', 0)
         off_start = 17 + (i - 1) * 27
         off_end = off_start + 26
-        md += f"| `0x{off_start:02X}..{off_end:02X}` | **Event #{i} Record (27 B)** | *Binary Record* | **Lat: {lat:+.4f}°, Lon: {lon:+.4f}°** | BBox: `[{x},{y},{w},{h}]` · Area: `{area} ha` · Conf: `{conf:.1f}%` · Δρ: `+{contrast}` |\n"
+        md += f"| `0x{off_start:02X}..{off_end:02X}` | **Event #{i} Record (27 B)** | *Binary Record* | **{loc_txt}** | BBox: `[{x},{y},{w},{h}]` · Area: `{area} ha` · Conf: `{conf:.1f}%` · Δρ: `+{contrast}` |\n"
+
+    n_drop = int(packet_json.get("events_dropped", 0))
+    if n_drop:
+        md += (f"| `Event #{n_ev} flags[7:4]` | **Dropped-event counter** | `{n_drop}` | **{n_drop}{'+' if n_drop >= 15 else ''} event(s) not sent** "
+               f"| Detected events that did not fit in the {MAX_EVENTS}-event packet (counter saturates at 15) |\n")
 
     crc_status = badge("VALIDATED (Integrity Confirmed)", "optimal") if crc_valid else badge("CHECKSUM ERROR", "alert")
     md += f"| `Trailer (4 B)` | **IEEE 802.3 CRC32** | `{crc}` | **{crc_status}** | Prevents corrupted downlink alerts |\n"
@@ -408,7 +417,7 @@ def run_inference(
         # both models simultaneously into RAM on every inference to prevent OOM crashes.
         is_constrained = bool(os.environ.get("RENDER") or os.environ.get("RENDER_INSTANCE_ID") or os.environ.get("CONSTRAINED_RAM"))
         if not is_constrained:
-            counterpart_variant = "FP32 (1.89 MB)" if "INT8" in model_variant else "INT8 (514 KiB)"
+            counterpart_variant = "FP32 (1.85 MiB)" if "INT8" in model_variant else "INT8 (514 KiB)"
             counterpart_pipe = get_pipeline(
                 model_variant=counterpart_variant,
                 num_threads=threads,
@@ -489,7 +498,8 @@ def run_inference(
         binary_mask = scene_mask
         prob_map = scene_prob
         if all_events:
-            packet_bytes = encode_packet(0, MODEL_ID, 0, all_events)
+            all_events.sort(key=lambda e: (e["confidence_u16"], e["area_ha_x10"]), reverse=True)
+            packet_bytes = encode_packet(0, MODEL_ID, 0, all_events, flags=FLAG_TIME_UNAVAILABLE)
             packet_json = decode_packet(packet_bytes)
         else:
             packet_bytes = last_packet
@@ -518,6 +528,8 @@ def run_inference(
 
     reduction_txt = "∞ (nothing transmitted)" if packet_size == 0 else f"{reduction_ratio:,.0f}×"
     edge_adv_txt = "nothing to send" if packet_size == 0 else f"{alert_vs_zlib_x:,.0f}× smaller"
+    events_txt = (f"{MAX_EVENTS} most confident sent, {len(events) - MAX_EVENTS} dropped (count carried in the packet)"
+                  if len(events) > MAX_EVENTS else "All clusters encoded")
     reduction_tail = ("while providing actionable event coordinates within seconds." if events
                       else "because no fire was found: the tile is simply not transmitted.")
 
@@ -534,36 +546,54 @@ def run_inference(
 
     if gt_mask is not None and binary_mask is not None:
         metrics = compute_pixel_metrics(binary_mask, gt_mask)
-        ev_metrics = compute_event_recall(events, gt_mask)
+        ev_metrics = compute_event_recall(binary_mask, gt_mask)
         gt_img = make_gt_comparison(binary_mask, gt_mask)
 
-        # Badges use exactly the reference values shown in the table (Model test-split averages, rounded down).
-        prec_badge = badge("AT/ABOVE REF", "optimal") if metrics['precision'] >= 0.950 else badge("BELOW REF", "margin")
-        rec_badge = badge("AT/ABOVE REF", "optimal") if metrics['recall'] >= 0.940 else badge("BELOW REF", "margin")
-        f1_badge = badge("AT/ABOVE REF", "optimal") if metrics['f1'] >= 0.945 else badge("BELOW REF", "margin")
-        iou_badge = badge("AT/ABOVE REF", "optimal") if metrics['iou'] >= 0.900 else badge("BELOW REF", "margin")
-        ev_badge = badge("DETECTED", "optimal") if ev_metrics['event_recall'] == 1.0 else badge("PARTIAL", "margin")
+        if not metrics['has_reference_fire']:
+            frame_badge = badge("CORRECTLY SILENT", "optimal") if metrics['fp'] == 0 else badge("FALSE ALARM", "alert")
+            metrics_summary_md = f"""### {SVG_TARGET} Verification Metrics (vs Pereira voting mask: SWIR-algorithm labels, not field ground truth)
+*The reference mask holds no fire in this tile, so precision, recall, F1 and IoU are undefined.*
 
-        metrics_summary_md = f"""### {SVG_TARGET} Verification Metrics (vs Pereira voting mask: SWIR-algorithm labels, not field ground truth)
-| Metric | This image | Model test-split reference (4,781 patches, rounded) | Status |
-| :--- | :---: | :---: | :---: |
-| **Precision** | **{metrics['precision']:.4f}** | ≥ 0.950 | {prec_badge} |
-| **Recall** | **{metrics['recall']:.4f}** | ≥ 0.940 | {rec_badge} |
-| **F1-Score** | **{metrics['f1']:.4f}** | ≥ 0.945 | {f1_badge} |
-| **IoU (Jaccard)** | **{metrics['iou']:.4f}** | ≥ 0.900 | {iou_badge} |
-| **Event Recall** | **{ev_metrics['event_recall']*100:.1f}%** | every labelled cluster matched | {ev_badge} |
+| Check | Result |
+| :--- | :---: |
+| **Predicted fire pixels (all false alarms)** | **{metrics['fp']:,} px** |
+| **Predicted events (all false events)** | **{ev_metrics['n_pred_events']}** |
+| **Frame decision** | {frame_badge} |
 
-- **True Positives**: {metrics['tp']:,} px &nbsp;|&nbsp; **False Positives**: {metrics['fp']:,} px &nbsp;|&nbsp; **False Negatives**: {metrics['fn']:,} px
+> Test-split reference: frame false-alarm rate **6.3 %** (53 of 835 fire-free test patches), i.e. about one fire-free tile in sixteen raises an alert.
 """
-        if metrics['recall'] == 1.0 and metrics['precision'] < 0.90:
-            metrics_summary_md += f"""
-> **Mission Note on Single-Image Metrics**:  
+        else:
+            def _vs_ref(value, ref):
+                return badge("AT/ABOVE REF", "optimal") if value >= ref else badge("BELOW REF", "margin")
+
+            prec_badge = _vs_ref(metrics['precision'], 0.9496)
+            rec_badge = _vs_ref(metrics['recall'], 0.9489)
+            f1_badge = _vs_ref(metrics['f1'], 0.9492)
+            iou_badge = _vs_ref(metrics['iou'], 0.9034)
+            all_found = ev_metrics['n_matched_events'] == ev_metrics['n_gt_events']
+            ev_badge = badge("ALL FOUND", "optimal") if all_found else badge("PARTIAL", "margin")
+
+            metrics_summary_md = f"""### {SVG_TARGET} Verification Metrics (vs Pereira voting mask: SWIR-algorithm labels, not field ground truth)
+| Metric | This image | Test-split reference (4,781 patches) | Status |
+| :--- | :---: | :---: | :---: |
+| **Precision** | **{metrics['precision']:.4f}** | 0.9496 | {prec_badge} |
+| **Recall** | **{metrics['recall']:.4f}** | 0.9489 | {rec_badge} |
+| **F1-Score** | **{metrics['f1']:.4f}** | 0.9492 | {f1_badge} |
+| **IoU (Jaccard)** | **{metrics['iou']:.4f}** | 0.9034 | {iou_badge} |
+| **Event Recall** | **{ev_metrics['event_recall']*100:.1f}%** ({ev_metrics['n_matched_events']}/{ev_metrics['n_gt_events']} labelled clusters) | 95.5% (all test events) | {ev_badge} |
+
+- **True Positives**: {metrics['tp']:,} px &nbsp;|&nbsp; **False Positives**: {metrics['fp']:,} px &nbsp;|&nbsp; **False Negatives**: {metrics['fn']:,} px &nbsp;|&nbsp; **False events**: {ev_metrics['false_events']}
+- Single tiles scatter widely around the test-split averages (most fires are a few pixels), so one image is an illustration, not a result.
+"""
+            if metrics['recall'] == 1.0 and metrics['precision'] < 0.90:
+                metrics_summary_md += f"""
+> **Note on single-image metrics**:  
 > Recall is **100.0%** (all {metrics['tp']} labelled fire pixels detected, none missed).  
-> The {metrics['fp']} extra pixels are predicted fire outside the voting mask. They may be flame-front pixels the 3-algorithm vote missed, or false positives; one image cannot tell which, and the voting masks are SWIR-algorithm output, not field ground truth. On the Model test split (4,781 patches): precision **0.9575**, F1 **0.9493**.
+> The {metrics['fp']} extra pixels are predicted fire outside the voting mask. They may be flame-front pixels the 3-algorithm vote missed, or false positives; one image cannot tell which, and the voting masks are SWIR-algorithm output, not field ground truth.
 """
     else:
         metrics_summary_md = f"""### {SVG_INFO} Operational Context
-*No ground truth mask is associated with this imagery (e.g. uncurated field acquisition or large scene). Results represent real-world autonomous edge inference without prior labels.*
+*No reference mask is associated with this imagery (e.g. uncurated field acquisition or large scene). Results represent real-world autonomous edge inference without prior labels.*
 """
 
     # 5. Build Telemetry & Latency Status Markdown
@@ -576,7 +606,7 @@ def run_inference(
 """
     if is_standard_patch:
         stage_names = [
-            ("Gate 1 (Quality & Radiation)", "gate1_ms"),
+            ("Gate 1 (Input Checks)", "gate1_ms"),
             ("Radiometric Preprocessing", "preprocess_ms"),
             (f"Neural Inference ({'INT8' if 'INT8' in model_variant else 'FP32'})", "infer_ms"),
             ("Calibration & Thresholding", "calibration_ms"),
@@ -589,6 +619,9 @@ def run_inference(
         telemetry_md += f"| **Total Pipeline Latency** | **`{total_pipeline_ms:.2f} ms`** | **100 ms self-set target (host CPU, not OBC)** |\n"
         telemetry_md += f"| **End-to-End Wall Time** | **`{wall_ms:.2f} ms`** | (Includes file I/O & rendering) |\n"
         telemetry_md += f"| **Inference threads** | **{pipeline.engine.threads_label}** | {model_variant} |\n"
+        _g1_notes = "; ".join((res.get("gate1_info") or {}).get("reasons", []))
+        if _g1_notes:
+            telemetry_md += f"| **Gate 1 notes** | {_g1_notes} | input checks (flag only unless repair is enabled) |\n"
         if parity_info:
             par_badge = badge(f"{parity_info['agree_pct']:.2f}% PARITY", "optimal" if parity_info['agree_pct'] >= 99.0 else "margin")
             telemetry_md += f"| **INT8/FP32 Parity (F13)** | **`{parity_info['agree_pct']:.3f}%`** | {par_badge} ({parity_info['agree_px']:,}/{parity_info['total_px']:,} px match, {parity_info['diff_px']} diff) |\n"
@@ -598,7 +631,7 @@ def run_inference(
 
     telemetry_md += f"\n**Throughput**: **`{throughput_fps:.1f} FPS`** &nbsp;|&nbsp; **Margin vs 100 ms target**: **`{max(0.0, (100.0 - total_pipeline_ms)/100.0 * 100):.1f}%`**\n"
     if parity_info:
-        telemetry_md += f"\n> **Precision Parity (F13)**: INT8 vs FP32 agreement on current frame is **`{parity_info['agree_pct']:.3f}%`** ({parity_info['diff_px']} diverging px / {parity_info['total_px']:,}). The INT8 file is about 3.7× smaller than FP32 (514.8 KiB vs 1.89 MiB); agreement below 100% means quantization is not lossless.\n"
+        telemetry_md += f"\n> **Precision Parity (F13)**: INT8 vs FP32 agreement on current frame is **`{parity_info['agree_pct']:.3f}%`** ({parity_info['diff_px']} diverging px / {parity_info['total_px']:,}). The INT8 file is about 3.7× smaller than FP32 (514.8 KiB vs 1.85 MiB); agreement below 100% means quantization is not lossless.\n"
 
     if ON_RENDER:
         telemetry_md += ("\n> **Shared cloud instance (Render free tier, 0.1 vCPU)**: these timings are not representative "
@@ -613,7 +646,7 @@ def run_inference(
 | **Binary Alert Packet** | **{packet_size} Bytes** | Compact Binary Alert Packet (Header + Events + CRC32) |
 | **Bandwidth Reduction (vs Raw)** | **`{reduction_txt}`** | **Total space-to-ground downlink data saved** |
 | **Edge Advantage (vs zlib)** | **`{edge_adv_txt}`** | **`{zlib_savings_pct:.1f}%` saved over lossless image compression** |
-| **Events Detected** | **{len(events)}** | {'Transmitted top 6 in alert' if len(events)>6 else 'All clusters encoded'} |
+| **Events Detected** | **{len(events)}** | {events_txt} |
 
 > **Information Extraction vs Blind Compression**:  
 > Lossless image compression (`zlib`) preserves raw sensor noise and only achieves **{zlib_ratio:.2f}×** reduction ({zlib_bytes/1024:.1f} KiB), which still saturates low-bandwidth direct-to-ground satellite links. IASTAM semantic edge intelligence extracts structured tactical fire alerts (**{packet_size} Bytes**), reducing downlink requirements by **{reduction_txt}** {reduction_tail}
@@ -695,9 +728,9 @@ def run_benchmark_30(model_variant: str, thread_mode: str, enable_scrub: bool):
 | :--- | :---: | :---: |
 | **Median Latency (p50)** | **`{p50:.2f} ms`** | 64.38 ms |
 | **95th Percentile (p95)** | **`{p95:.2f} ms`** | 77.68 ms |
-| **Minimum Latency** | **`{min_t:.2f} ms`** | 58.42 ms (Inference floor) |
-| **Maximum Latency** | **`{max_t:.2f} ms`** | 85.10 ms |
-| **Sustained Throughput** | **`{fps:.1f} FPS`** | 15.2 FPS |
+| **Mean Latency** | **`{float(np.mean(latencies)):.2f} ms`** | 65.68 ms |
+| **99th Percentile (p99, 30 runs)** | **`{float(np.percentile(latencies, 99)):.2f} ms`** | 91.30 ms |
+| **Throughput at p50** | **`{fps:.1f} FPS`** | 15.5 FPS |
 | **100 ms self-set target** | {status_pass} | **100 ms (self-set, host CPU)** |
 
 *Stage Breakdown (p50)*: Gate 1: `{np.median(stage_times['gate1']):.2f} ms` · Preprocess: `{np.median(stage_times['preprocess']):.2f} ms` · Inference: `{np.median(stage_times['infer']):.2f} ms` · Event CCL: `{np.median(stage_times['event']):.2f} ms`
@@ -1433,11 +1466,11 @@ MISSION_HEADER_HTML = f"""
         <div class="telemetry-badges-right">
             <div class="badge-card">
                 <div class="badge-label">HOST LATENCY (p50)</div>
-                <div class="badge-val text-emerald">64.38 ms <span class="badge-sub">15.2 FPS</span></div>
+                <div class="badge-val text-emerald">64.38 ms <span class="badge-sub">15.5 FPS</span></div>
             </div>
             <div class="badge-card">
                 <div class="badge-label">DOWNLINK REDUCTION</div>
-                <div class="badge-val text-cyan">8,192× <span class="badge-sub">384 KiB → 48 B</span></div>
+                <div class="badge-val text-cyan">5,132× <span class="badge-sub">384 KiB → 76.6 B mean alert</span></div>
             </div>
             <div class="badge-card">
                 <div class="badge-label">ONNX INT8 MODEL</div>
@@ -1478,7 +1511,7 @@ with gr.Blocks(**_blocks_kwargs) as demo:
                     sample_dropdown = gr.Dropdown(
                         choices=list(PRESET_SAMPLES.keys()),
                         value=list(PRESET_SAMPLES.keys())[0],
-                        label="Select Curated Satellite Patch (with Ground Truth)",
+                        label="Select Curated Satellite Patch (with reference mask)",
                         interactive=True
                     )
 
@@ -1491,10 +1524,10 @@ with gr.Blocks(**_blocks_kwargs) as demo:
 
             with gr.Accordion("Edge Hardware & Model Configuration", open=True):
                 model_selector = gr.Radio(
-                    choices=["INT8 (514 KiB)", "FP32 (1.89 MB)"],
+                    choices=["INT8 (514 KiB)", "FP32 (1.85 MiB)"],
                     value="INT8 (514 KiB)",
                     label="Model Precision (ONNX)",
-                    info="INT8 achieves 3.68x compression with 99.999% decision agreement"
+                    info="INT8 file is 3.7x smaller; alert decisions agree with PyTorch FP32 on 99% of 1,500 test frames"
                 )
                 thread_selector = gr.Radio(
                     choices=["1 Thread (Embedded OBC Emulation)", "All CPU Cores"],
@@ -1505,12 +1538,12 @@ with gr.Blocks(**_blocks_kwargs) as demo:
                 scrub_checkbox = gr.Checkbox(
                     value=False,
                     label="Enable Gate 1 Transient Scrubbing",
-                    info="Applies 3×3 median scrub on isolated cosmic-ray/SEU spikes"
+                    info="Replaces isolated saturated pixels (possible radiation hits / hot pixels) by the 3×3 median; can also erase a real 1-pixel fire"
                 )
                 threshold_slider = gr.Slider(
                     minimum=0.50, maximum=0.99, value=THRESHOLD_DEFAULT, step=0.01,
                     label="Decision Threshold (τ)",
-                    info=f"Operational threshold determined from manifest_v7.json (τ={THRESHOLD_DEFAULT:.2f}, T={TEMPERATURE_DEFAULT:.4f})"
+                    info=f"Operational threshold read from the model manifest (τ={THRESHOLD_DEFAULT:.2f}, T={TEMPERATURE_DEFAULT:.4f})"
                 )
 
             run_btn = gr.Button("Execute Edge Pipeline", variant="primary", size="lg")
@@ -1532,7 +1565,7 @@ with gr.Blocks(**_blocks_kwargs) as demo:
                 mask_view = gr.Image(label=f"Binary Fire Mask (τ={THRESHOLD_DEFAULT:.2f})", type="numpy")
                 overlay_view = gr.Image(label="Detection Overlay + Bounding Boxes", type="numpy")
 
-            gt_view = gr.Image(label="Ground Truth Evaluation (Prediction vs GT vs Error Map)", type="numpy")
+            gt_view = gr.Image(label="Reference-Mask Evaluation (Prediction vs Voting Mask vs Error Map)", type="numpy")
             metrics_box = gr.Markdown()
 
             with gr.Accordion("Compact Binary Alert Packet Protocol (Version 3)", open=True):

@@ -100,7 +100,8 @@ payload-dependent extension.
 ┌──────────────────────────────────────────────────────────────────────────┐
 │ 1. Gate 1 — Input quality screening                                      │
 │    Shape/finite checks, dead bands/columns, saturation; optional          │
-│    isolated-saturated-pixel scrub (off by default)                        │
+│    isolated-saturated-pixel scrub and optional dead-column repair         │
+│    (both off by default)                                                  │
 └──────────────────────────────────┬───────────────────────────────────────┘
                                    ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
@@ -235,8 +236,9 @@ false-alarm rate can be computed on this set.
   FAR from 1.00 to 0.07. Scrubbing costs about 1.5 points of pixel recall on
   clean data (real one-pixel fires can saturate), so it is **off by default**.
   Dead columns remain highly damaging (one dead column in one band raises frame
-  FAR to 0.36): Gate 1 flags them but does not repair them. These are synthetic
-  perturbations, not radiation tests.
+  FAR to 0.36): in the evaluated configuration Gate 1 flags them but does not
+  repair them (the demo has an optional interpolation repair, off by default and
+  not yet measured). These are synthetic perturbations, not radiation tests.
 - In the 50%-capacity queue simulation, priority plus persistence/retry
   delivered **87.6%** of the top-20% urgent events, compared with **33.6%** for
   FIFO, with zero permanently lost packets for the persistent policies. Under
@@ -275,9 +277,12 @@ unless the false-alarm rate on empty scenes is far below 6% (projection in
 [`docs/MODEL_ARCHITECTURE.md`](docs/MODEL_ARCHITECTURE.md) §12.4). These are
 software/accounting results, not measured RF-link throughput.
 
-Known packet limits: area is stored in 0.1 ha units, so a single pixel rounds
-to zero below about 22 m ground sampling (and Gate 2 would then reject it);
-events beyond six per frame are dropped without a count.
+Known packet limits: area is stored in 0.1 ha units, so in the evaluated notebook
+run a single pixel rounds to zero below about 22 m ground sampling and Gate 2
+then rejects it (the demo floors the field at 1). Events beyond six per frame are
+not transmitted; the demo records how many were dropped (saturating at 15) in
+the event flags byte, with the packet layout and the 183-byte maximum unchanged.
+The packet is a custom format, not a CCSDS Space Packet.
 
 The persistent queue keeps an alert for a later contact when the current
 contact is missed. This behavior is simulated in software with synthetic
@@ -333,7 +338,16 @@ cd demo
 pip install -r requirements.txt
 python app.py
 # Open http://127.0.0.1:7860
+`````
+
+Demo verification tests (packet encoding and CRC, Gate 1, event metrics, INT8/FP32
+agreement, golden vectors; tests that need a missing model or sample are skipped):
+
+```bash
+cd demo
+python test_demo.py
 ```
+`````
 
 ### Run with Docker
 
@@ -407,8 +421,9 @@ Useful entry points:
    calibration, two-point NUC, optical blur, noise, quantization, and resampling.
 4. Run the ONNX/INT8 bundle on Raspberry Pi CM4-class or equivalent hardware
    and measure latency, memory, and energy per inference.
-5. Add column-defect handling to Gate 1 and a transient filter that does not
-   delete real one-pixel fires.
+5. Measure the optional dead-column repair (implemented in the demo, not yet
+   evaluated) on the robustness scenarios, and add a transient filter that does
+   not delete real one-pixel fires.
 6. Complete hardware-in-the-loop validation for sensor faults, radiation-like
    transients, missed contacts, queue overflow, and retry behavior.
 7. Add orbit/contact simulation and validate downlink performance against an
