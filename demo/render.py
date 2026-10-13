@@ -173,7 +173,7 @@ def make_gt_comparison(pred_mask: np.ndarray, gt_mask: np.ndarray) -> np.ndarray
     axes[0].set_title(f"Predicted Fire ({int(pred_mask.sum())} px)", color=COLOR_TEXT, fontsize=10, fontweight="bold")
     axes[0].axis("off")
 
-    # Panel 2: Ground Truth
+    # Panel 2: Reference mask
     axes[1].imshow(gt_mask, cmap="Greens", vmin=0, vmax=1, interpolation="nearest")
     axes[1].set_title(f"Reference Mask ({int(gt_mask.sum())} px)", color=COLOR_TEXT, fontsize=10, fontweight="bold")
     axes[1].axis("off")

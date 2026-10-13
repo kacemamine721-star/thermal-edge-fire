@@ -132,8 +132,8 @@ if not INT8_MODEL_PATH.exists() and os.environ.get("MODEL_FALLBACK_DIR"):
 
 # ───────────────── Curated Sample Catalog ─────────────────
 PRESET_SAMPLES = {
-    "[Severe] Large Wildfire (125 Fire Pixels · Severe Active Blaze)": "LC08_L1GT_226074_20200921_20200921_01_RT_p00811.tif",
-    "[Cluster] Medium Wildfire (33 Fire Pixels · Active Cluster)": "LC08_L1GT_226074_20200921_20200921_01_RT_p00812.tif",
+    "[Severe] Large Wildfire (168 Fire Pixels · Severe Active Blaze)": "LC08_L1GT_226074_20200921_20200921_01_RT_p00811.tif",
+    "[Cluster] Medium Wildfire (45 Fire Pixels · Active Cluster)": "LC08_L1GT_226074_20200921_20200921_01_RT_p00812.tif",
     "[Small] Emerging Fire (1 Fire Pixel · Sensitivity Test)": "LC08_L1GT_117060_20200825_20200825_01_RT_p00625.tif",
     "[Control] Fire-Free Vegetation Control (Zero-Fire Ground Truth)": "LC08_L1TP_001067_20200812_20200812_01_RT_p00000_clean_forest.tif",
     "[Deforestation] Amazon Wildfire (118 Fire Pixels · Active Front)": "LC08_L1TP_001067_20200812_20200812_01_RT_p00441.tif",
@@ -563,7 +563,11 @@ def run_inference(
 > Test-split reference: frame false-alarm rate **6.3 %** (53 of 835 fire-free test patches), i.e. about one fire-free tile in sixteen raises an alert.
 """
         else:
+            small_ref = metrics['gt_fire_pixels'] < 10   # with a handful of pixels every score is 0, 0.5 or 1
+
             def _vs_ref(value, ref):
+                if small_ref:
+                    return badge("FEW PX", "margin")
                 return badge("AT/ABOVE REF", "optimal") if value >= ref else badge("BELOW REF", "margin")
 
             prec_badge = _vs_ref(metrics['precision'], 0.9496)
@@ -584,6 +588,9 @@ def run_inference(
 
 - **True Positives**: {metrics['tp']:,} px &nbsp;|&nbsp; **False Positives**: {metrics['fp']:,} px &nbsp;|&nbsp; **False Negatives**: {metrics['fn']:,} px &nbsp;|&nbsp; **False events**: {ev_metrics['false_events']}
 - Single tiles scatter widely around the test-split averages (most fires are a few pixels), so one image is an illustration, not a result.
+"""
+            if small_ref:
+                metrics_summary_md += f"""- **Only {metrics['gt_fire_pixels']} reference fire pixel(s) in this tile**: with so few pixels every score is 0, 0.5 or 1, so it cannot be compared with the test-split averages. Read it as a detection check, not as a metric.
 """
             if metrics['recall'] == 1.0 and metrics['precision'] < 0.90:
                 metrics_summary_md += f"""
@@ -1645,6 +1652,25 @@ try:
     demo.queue(default_concurrency_limit=1, max_size=6)  # run/benchmark share one slot ("pipeline"); extra visitors wait
 except TypeError:
     demo.queue()
+
+# Gracefully absorb client disconnections (tab closed, page refreshed, cancelled upload)
+# so Uvicorn does not dump an unhandled ASGI ClientDisconnect traceback.
+if hasattr(demo, "app") and hasattr(demo.app, "add_exception_handler"):
+    from starlette.requests import ClientDisconnect
+    from starlette.responses import Response
+
+    async def _client_disconnect_handler(request: Any, exc: ClientDisconnect) -> Response:
+        return Response(status_code=499)
+
+    demo.app.add_exception_handler(ClientDisconnect, _client_disconnect_handler)
+
+    @demo.app.middleware("http")
+    async def _catch_disconnect_middleware(request: Any, call_next: Any) -> Response:
+        try:
+            return await call_next(request)
+        except ClientDisconnect:
+            return Response(status_code=499)
+
 
 
 if __name__ == "__main__":
