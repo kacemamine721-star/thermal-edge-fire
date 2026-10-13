@@ -4,7 +4,7 @@
 
 <div align="center">
 
-# <i class="fa-solid fa-satellite" style="color:#38bdf8; font-size:1.05em; vertical-align:-1px; margin-right:8px;"></i> Thermal-Edge-Fire: Onboard Wildfire Information Extraction
+# Thermal-Edge-Fire: Onboard Wildfire Information Extraction
 
 ### A sensor-agnostic edge-processing architecture and multispectral proof of concept for 6U-class CubeSat missions
 
@@ -23,7 +23,7 @@
 
 ---
 
-## <i class="fa-solid fa-circle-info" style="color:#38bdf8; font-size:1.05em; vertical-align:-1px; margin-right:8px;"></i> Read this scope note first
+## Read this scope note first
 
 This repository is **not** a flight-qualified autonomous system or a validated
 uncooled LWIR microbolometer payload. It is a software pipeline targeting a
@@ -62,7 +62,7 @@ target-hardware measurements.
 
 ---
 
-## <i class="fa-solid fa-crosshairs" style="color:#38bdf8; font-size:1.05em; vertical-align:-1px; margin-right:8px;"></i> Problem and contribution
+## Problem and contribution
 
 Earth-observation missions collect more imagery than can be transmitted during
 short ground contacts. For wildfire response, the useful output is not every
@@ -90,7 +90,7 @@ data**.
 
 ---
 
-## <i class="fa-solid fa-sliders" style="color:#10b981; font-size:1.05em; vertical-align:-1px; margin-right:8px;"></i> Six-stage processing architecture
+## Six-stage processing architecture
 
 The project implements a dual-gate architecture around the validated
 multispectral model; the LWIR-specific calibration path remains a
@@ -141,7 +141,7 @@ The architecture dossier is available at
 
 ---
 
-## <i class="fa-solid fa-microchip" style="color:#10b981; font-size:1.05em; vertical-align:-1px; margin-right:8px;"></i> What the experiments established
+## What the experiments established
 
 ### Band selection from paper and empirical result
 
@@ -320,7 +320,7 @@ as a live spacecraft or as a substitute for target-board validation.
 
 ---
 
-## <i class="fa-solid fa-terminal" style="color:#38bdf8; font-size:1.05em; vertical-align:-1px; margin-right:8px;"></i> Quickstart
+## Quickstart
 
 ### Local environment
 
@@ -360,7 +360,7 @@ not constitute a measured spacecraft power budget.
 
 ---
 
-## <i class="fa-solid fa-layer-group" style="color:#38bdf8; font-size:1.05em; vertical-align:-1px; margin-right:8px;"></i> Dataset and validation strategy
+## Dataset and validation strategy
 
 | Dataset or source | Role | Scope |
 | --- | --- | --- |
@@ -380,7 +380,7 @@ without this additional validation.
 
 ---
 
-## <i class="fa-solid fa-box-archive" style="color:#38bdf8; font-size:1.05em; vertical-align:-1px; margin-right:8px;"></i> Repository layout
+## Repository layout
 
 ```text
 thermal-edge-fire/
@@ -410,7 +410,7 @@ Useful entry points:
 
 ---
 
-## <i class="fa-solid fa-gauge-high" style="color:#f59e0b; font-size:1.05em; vertical-align:-1px; margin-right:8px;"></i> Roadmap and known boundaries
+## Roadmap and known boundaries
 
 1. Measure the frame false-alarm rate and alert precision on genuinely empty,
    orbit-like scenes, and report data reduction at realistic fire prevalences.
@@ -434,7 +434,7 @@ software information-extraction pipeline on Landsat/Pereira data and a proposed
 
 ---
 
-## <i class="fa-solid fa-satellite" style="color:#38bdf8; font-size:1.05em; vertical-align:-1px; margin-right:8px;"></i> Authors & Acknowledgments
+## Authors & Acknowledgments
 
 * **SpaceTOON / IASTAM Project Team** : Rahma Trabelsi, Amine Kacem, Sahar Feki, Yessmine Chaabouni, Khaled Cheniour
 * **Technical Supervision:** Space & Earth Observation AI Challenge (IASTAM 2026)
